@@ -12,6 +12,7 @@ Last Modified: 06/11/2025
 
 from pathlib import Path
 import sys
+from llama_cpp import Llama
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -20,12 +21,44 @@ import os
 import nltk
 import json
 
-from mosaic.path_utils import CFG, raw_path, proc_path, eval_path, project_root
+# from mosaic.path_utils import CFG, raw_path, proc_path, eval_path, project_root
+
+
+try:
+    from mosaic.path_utils import CFG, raw_path, proc_path, eval_path, project_root  # type: ignore
+except Exception:
+    # Minimal stand-in so the app works anywhere (Streamlit Cloud, local without MOSAIC, etc.)
+    def _env(key: str, default: str) -> Path:
+        val = os.getenv(key, default)
+        return Path(val).expanduser().resolve()
+
+    # Defaults: app-local data/ eval/ that are safe on Cloud
+    _DATA_ROOT = _env("MOSAIC_DATA", str(Path(__file__).parent / "data"))
+    _BOX_ROOT  = _env("MOSAIC_BOX",  str(Path(__file__).parent / "data" / "raw"))
+    _EVAL_ROOT = _env("MOSAIC_EVAL", str(Path(__file__).parent / "eval"))
+
+    CFG = {
+        "data_root": str(_DATA_ROOT),
+        "box_root":  str(_BOX_ROOT),
+        "eval_root": str(_EVAL_ROOT),
+    }
+
+    def project_root() -> Path:
+        return Path(__file__).resolve().parent
+
+    def raw_path(*parts: str) -> Path:
+        return _BOX_ROOT.joinpath(*parts)
+
+    def proc_path(*parts: str) -> Path:
+        return _DATA_ROOT.joinpath(*parts)
+
+    def eval_path(*parts: str) -> Path:
+        return _EVAL_ROOT.joinpath(*parts)
 
 # BERTopic stack
 from bertopic import BERTopic
 from bertopic.representation import LlamaCPP
-from llama_cpp import Llama
+# from llama_cpp import Llama
 from sentence_transformers import SentenceTransformer
 
 # Clustering/dimensionality reduction

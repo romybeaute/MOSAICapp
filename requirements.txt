@@ -1,0 +1,12 @@
+streamlit>=1.37
+pandas
+numpy
+nltk
+bertopic
+umap-learn
+hdbscan
+scikit-learn
+sentence-transformers
+datamapplot
+huggingface_hub
+matplotlib

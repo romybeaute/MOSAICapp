@@ -1,0 +1,11 @@
+# python
+__pycache__/
+*.pyc
+
+# streamlit
+.streamlit/secrets.toml
+
+# caches
+.cache/
+
+MOSAICapp.code-workspace

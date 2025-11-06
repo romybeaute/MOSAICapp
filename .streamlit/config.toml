@@ -1,0 +1,3 @@
+[server]
+headless = true
+maxUploadSize = 500   # MB; adjust if people upload large CSVs

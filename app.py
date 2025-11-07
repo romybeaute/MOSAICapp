@@ -668,12 +668,115 @@ else:
         if "latest_results" in st.session_state:
             tm, reduced, labs = st.session_state.latest_results
 
-            st.subheader("Topic Visualization")
+            st.subheader("Experiential Topics Visualisation")
             fig, _ = datamapplot.create_plot(reduced, labs)
             st.pyplot(fig)
 
             st.subheader("Topic Info")
             st.dataframe(tm.get_topic_info())
+
+
+                        # --- Export: one row per topic (topic_id, LLM topic_name, texts) ---
+            st.subheader("Export results (one row per topic)")
+
+            # 1) Pull LLM labels directly from BERTopic's representation
+            full_reps = tm.get_topics(full=True)
+            llm_reps = full_reps.get("LLM", {})  # {topic_id: [(label, score), ...], ...}
+
+            # Build topic_id -> LLM label map; fall back to Name if missing
+            llm_names = {}
+            for tid, vals in llm_reps.items():
+                try:
+                    llm_names[tid] = (vals[0][0] or "").strip().strip('"').strip(".")
+                except Exception:
+                    llm_names[tid] = "Unlabelled"
+
+            if not llm_names:
+                # Fallback: whatever BERTopic put in Name
+                llm_names = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
+
+            # 2) Per-document assignments for current docs
+            doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
+
+            # 3) Optionally remove outliers
+            include_outliers = st.checkbox("Include outlier topic (-1)", value=False)
+            if not include_outliers:
+                doc_info = doc_info[doc_info["Topic"] != -1]
+
+            # 4) Group texts by topic
+            grouped = (
+                doc_info.groupby("Topic")["Document"]
+                .apply(list)
+                .reset_index(name="texts")
+            )
+
+            # 5) Attach LLM names
+            grouped["topic_name"] = grouped["Topic"].map(llm_names).fillna("Unlabelled")
+
+            # 6) Reorder/rename columns
+            export_topics = grouped.rename(columns={"Topic": "topic_id"})[
+                ["topic_id", "topic_name", "texts"]
+            ].sort_values("topic_id").reset_index(drop=True)
+
+            # ---- CSV + JSONL outputs ----
+            # Fixed separator (no textbox)
+            # SEP = " || "  # change if you prefer another fixed separator
+            SEP = "\n"  # change if you prefer another fixed separator
+
+            # Flatten lists for CSV
+            export_csv = export_topics.copy()
+            export_csv["texts"] = export_csv["texts"].apply(lambda lst: SEP.join(map(str, lst)))
+
+            base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            gran = "sentences" if selected_granularity else "reports"
+            csv_name  = f"topics_{base}_{gran}.csv"
+            jsonl_name = f"topics_{base}_{gran}.jsonl"
+            csv_path  = (EVAL_DIR / csv_name).resolve()
+            jsonl_path = (EVAL_DIR / jsonl_name).resolve()
+
+            cL, cC, cR = st.columns(3)
+
+            with cL:
+                if st.button("Save CSV to eval/", use_container_width=True):
+                    try:
+                        export_csv.to_csv(csv_path, index=False)
+                        st.success(f"Saved CSV → {csv_path}")
+                    except Exception as e:
+                        st.error(f"Failed to save CSV: {e}")
+
+            with cC:
+                # JSONL preserves the list structure of texts
+                if st.button("Save JSONL to eval/", use_container_width=True):
+                    try:
+                        with open(jsonl_path, "w", encoding="utf-8") as f:
+                            for _, row in export_topics.iterrows():
+                                rec = {
+                                    "topic_id": int(row["topic_id"]),
+                                    "topic_name": row["topic_name"],
+                                    "texts": list(map(str, row["texts"])),
+                                }
+                                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                        st.success(f"Saved JSONL → {jsonl_path}")
+                    except Exception as e:
+                        st.error(f"Failed to save JSONL: {e}")
+
+            with cR:
+                st.download_button(
+                    "Download CSV",
+                    data=export_csv.to_csv(index=False).encode("utf-8"),
+                    file_name=csv_name,
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+            st.caption("Preview (one row per topic)")
+            st.dataframe(export_csv.head(10))
+
+
+
+            
+
+            
         else:
             st.info("Click 'Run Analysis' to begin.")
 

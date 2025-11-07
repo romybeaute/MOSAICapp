@@ -15,3 +15,14 @@ eval/**/
 *.npz
 .DS_Store
 data/**/preprocessed/cache/
+
+# Caches/binaries
+data/**/preprocessed/cache/
+eval/**/cache/
+*.npy
+*.npz
+*.pt
+*.bin
+*.gguf
+.DS_Store
+

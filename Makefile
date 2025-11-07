@@ -8,22 +8,18 @@ BRANCH_CLEAN    ?= hf-clean
 
 deploy-hf: add-hf-remote ensure-ignore
 	@set -e; \
-	echo ">> Creating orphan branch $(BRANCH_CLEAN)"; \
-	git rev-parse --abbrev-ref HEAD > .git-previous-branch; \
-	git checkout --orphan $(BRANCH_CLEAN); \
-	echo ">> Clearing index"; \
+	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	echo ">> Creating orphan branch hf-clean from $${BRANCH}"; \
+	(git branch -D hf-clean >/dev/null 2>&1 || true); \
+	git switch --orphan hf-clean; \
 	git rm -rf --cached . >/dev/null 2>&1 || true; \
-	echo ">> Staging all files"; \
 	git add -A; \
-	echo ">> Committing clean deploy"; \
-	git commit -m "Deploy to HF Space (clean orphan)"; \
-	echo ">> Pushing to $(HF_SPACE_REMOTE) main (force)"; \
-	git push $(HF_SPACE_REMOTE) $(BRANCH_CLEAN):main --force; \
-	echo ">> Returning to previous branch"; \
-	git checkout "$$(cat .git-previous-branch)"; \
-	git branch -D $(BRANCH_CLEAN) || true; \
-	rm -f .git-previous-branch; \
+	git commit -m "Deploy"; \
+	git push hf hf-clean:main --force; \
+	git switch $${BRANCH}; \
+	git branch -D hf-clean >/dev/null 2>&1 || true; \
 	echo "✅ Deploy completed."
+
 
 add-hf-remote:
 	@set -e; \

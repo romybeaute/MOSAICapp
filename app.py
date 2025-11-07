@@ -77,6 +77,13 @@ from huggingface_hub import hf_hub_download
 # 0. Constants & Helper Functions
 # =====================================================================
 
+
+def _slugify(s: str) -> str:
+    s = s.strip()
+    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
+    return s or "DATASET"
+
+
 ACCEPTABLE_TEXT_COLUMNS = [
     "reflection_answer_english",
     "reflection_answer",
@@ -140,21 +147,46 @@ st.title("Topic Modelling Dashboard for Phenomenological Reports")
 # 2. Dataset paths (using MOSAIC structure)
 # =====================================================================
 
-DATASET = "INNERSPEECH"
+# DATASET = "INNERSPEECH"
 
-RAW_DIR  = raw_path(DATASET)
-PROC_DIR = proc_path(DATASET, 'preprocessed')
-EVAL_DIR = eval_path(DATASET)
+# --- Choose dataset/project name (drives folder names) ---
+ds_input = st.sidebar.text_input("Project/Dataset name", value="MOSAIC", key="dataset_name_input")
+DATASET_DIR = _slugify(ds_input).upper()
+
+
+RAW_DIR  = raw_path(DATASET_DIR)
+PROC_DIR = proc_path(DATASET_DIR, "preprocessed")
+EVAL_DIR = eval_path(DATASET_DIR)
 CACHE_DIR = PROC_DIR / "cache"
 
 PROC_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 EVAL_DIR.mkdir(parents=True, exist_ok=True)
 
-DATASETS = {
-    "API Translation (Batched)": str(PROC_DIR / "innerspeech_translated_batched_API.csv"),
-    "Local Translation (Llama)": str(PROC_DIR / "innerspeech_dataset_translated_llama.csv"),
-}
+
+with st.sidebar.expander("About the dataset name", expanded=False):
+    st.markdown(
+        f"""
+- The name above is converted to **UPPER CASE** and used as a folder name.
+- If the folder doesn’t exist, it will be **created**:
+  - Preprocessed CSVs: `{PROC_DIR}`
+  - Exports (results): `{EVAL_DIR}`
+- If you choose **Use preprocessed CSV on server**, I’ll list CSVs in `{PROC_DIR}`.
+- If you **upload** a CSV, it will be saved to `{PROC_DIR}/uploaded.csv`.
+        """.strip()
+    )
+
+# DATASETS = {
+#     "API Translation (Batched)": str(PROC_DIR / "innerspeech_translated_batched_API.csv"),
+#     "Local Translation (Llama)": str(PROC_DIR / "innerspeech_dataset_translated_llama.csv"),
+# }
+
+def _list_server_csvs(proc_dir: Path) -> list[str]:
+    return [str(p) for p in sorted(proc_dir.glob("*.csv"))]
+
+# will be populated later (after CSV_PATH is known)
+DATASETS = None  # keep name for clarity; we’ll fill it when rendering the sidebar
+
 
 HISTORY_FILE = str(PROC_DIR / "run_history.json")
 
@@ -380,16 +412,41 @@ source = st.sidebar.radio(
 uploaded_csv_path = None
 CSV_PATH = None  # will be set in the chosen branch
 
-if source == "Use preprocessed CSV on server":
-    # Show dataset selector ONLY in this branch
-    selected_dataset_name = st.sidebar.selectbox(
-        "Choose a dataset",
-        list(DATASETS.keys()),
-        key="dataset_name",
-    )
-    CSV_PATH = DATASETS[selected_dataset_name]
+# if source == "Use preprocessed CSV on server":
+#     # Show dataset selector ONLY in this branch
+#     selected_dataset_name = st.sidebar.selectbox(
+#         "Choose a dataset",
+#         list(DATASETS.keys()),
+#         key="dataset_name",
+#     )
+#     CSV_PATH = DATASETS[selected_dataset_name]
 
-else:  # Upload my own CSV
+# else:  # Upload my own CSV
+#     up = st.sidebar.file_uploader("Upload a CSV", type=["csv"], key="upload_csv")
+#     if up is not None:
+#         tmp_df = pd.read_csv(up)
+#         col = _pick_text_column(tmp_df)
+#         if col is None:
+#             st.error("CSV must contain a text column such as: " + ", ".join(ACCEPTABLE_TEXT_COLUMNS))
+#             st.stop()
+#         if col != "reflection_answer_english":
+#             tmp_df = tmp_df.rename(columns={col: "reflection_answer_english"})
+#         uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
+#         tmp_df.to_csv(uploaded_csv_path, index=False)
+#         st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
+#         CSV_PATH = uploaded_csv_path
+#     else:
+#         st.info("Upload a CSV to continue.")
+#         st.stop()
+if source == "Use preprocessed CSV on server":
+    # List preprocessed CSVs inside this dataset’s folder
+    available = _list_server_csvs(PROC_DIR)
+    if not available:
+        st.info(f"No CSVs found in {PROC_DIR}. Switch to 'Upload my own CSV' or change the dataset name.")
+        st.stop()
+    selected_csv = st.sidebar.selectbox("Choose a preprocessed CSV", available, key="server_csv_select")
+    CSV_PATH = selected_csv
+else:
     up = st.sidebar.file_uploader("Upload a CSV", type=["csv"], key="upload_csv")
     if up is not None:
         tmp_df = pd.read_csv(up)
@@ -399,6 +456,7 @@ else:  # Upload my own CSV
             st.stop()
         if col != "reflection_answer_english":
             tmp_df = tmp_df.rename(columns={col: "reflection_answer_english"})
+        # Save into THIS dataset’s preprocessed folder
         uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
         tmp_df.to_csv(uploaded_csv_path, index=False)
         st.success(f"Uploaded CSV saved to {uploaded_csv_path}")

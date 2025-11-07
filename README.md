@@ -1,3 +1,13 @@
+---
+title: MOSAICapp
+colorFrom: indigo
+colorTo: blue
+sdk: streamlit
+app_file: app.py
+pinned: false
+---
+
+
 # MOSAIC Topic Dashboard
 
 A Streamlit app for BERTopic-based topic modelling with sentence-transformers embeddings.  

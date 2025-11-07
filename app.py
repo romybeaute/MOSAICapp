@@ -109,6 +109,21 @@ for _k in ("MOSAIC_DATA", "MOSAIC_BOX"):
 
 
 
+@st.cache_data
+def count_clean_reports(csv_path: str) -> int:
+    df = pd.read_csv(csv_path)
+    col = _pick_text_column(df)
+    if col is None:
+        return 0
+    if col != "reflection_answer_english":
+        df = df.rename(columns={col: "reflection_answer_english"})
+    df.dropna(subset=["reflection_answer_english"], inplace=True)
+    df["reflection_answer_english"] = df["reflection_answer_english"].astype(str)
+    df = df[df["reflection_answer_english"].str.strip() != ""]
+    return len(df)
+
+
+
 # =====================================================================
 # 1. Streamlit app setup
 # =====================================================================
@@ -116,8 +131,8 @@ for _k in ("MOSAIC_DATA", "MOSAIC_BOX"):
 st.set_page_config(page_title="Advanced Topic Modeling", layout="wide")
 st.title("Topic Modelling Dashboard for Phenomenological Reports")
 
-ROOT = project_root()
-sys.path.append(str(ROOT / "MULTILINGUAL"))
+# ROOT = project_root()
+# sys.path.append(str(ROOT / "MULTILINGUAL"))
 
 
 
@@ -352,10 +367,67 @@ def generate_and_save_embeddings(csv_path, docs_file, emb_file,
 # 6. Sidebar — dataset, upload, parameters
 # =====================================================================
 
-st.sidebar.header("Data Source & Model")
+# --- User CSV upload / server dataset ---
+st.sidebar.header("Data Input Method")
 
-selected_dataset_name = st.sidebar.selectbox("Choose a dataset",
-                                             list(DATASETS.keys()))
+source = st.sidebar.radio(
+    "Choose data source",
+    ("Use preprocessed CSV on server", "Upload my own CSV"),
+    index=0,
+    key="data_source",
+)
+
+uploaded_csv_path = None
+CSV_PATH = None  # will be set in the chosen branch
+
+if source == "Use preprocessed CSV on server":
+    # Show dataset selector ONLY in this branch
+    selected_dataset_name = st.sidebar.selectbox(
+        "Choose a dataset",
+        list(DATASETS.keys()),
+        key="dataset_name",
+    )
+    CSV_PATH = DATASETS[selected_dataset_name]
+
+else:  # Upload my own CSV
+    up = st.sidebar.file_uploader("Upload a CSV", type=["csv"], key="upload_csv")
+    if up is not None:
+        tmp_df = pd.read_csv(up)
+        col = _pick_text_column(tmp_df)
+        if col is None:
+            st.error("CSV must contain a text column such as: " + ", ".join(ACCEPTABLE_TEXT_COLUMNS))
+            st.stop()
+        if col != "reflection_answer_english":
+            tmp_df = tmp_df.rename(columns={col: "reflection_answer_english"})
+        uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
+        tmp_df.to_csv(uploaded_csv_path, index=False)
+        st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
+        CSV_PATH = uploaded_csv_path
+    else:
+        st.info("Upload a CSV to continue.")
+        st.stop()
+
+
+
+
+# --- Subsample ---
+st.sidebar.subheader("Data Granularity & Subsampling")
+
+selected_granularity = st.sidebar.checkbox("Split reports into sentences", value=True)
+granularity_label = "sentences" if selected_granularity else "reports"
+
+subsample_perc = st.sidebar.slider("Data sampling (%)", 10, 100, 100, 5)
+
+# line break
+st.sidebar.markdown("---")
+
+
+
+# --- Embedding model selection ---
+st.sidebar.header("Model Selection")
+
+
+
 selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
     "intfloat/multilingual-e5-large-instruct",
     "Qwen/Qwen3-Embedding-0.6B",
@@ -363,49 +435,19 @@ selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
     "sentence-transformers/all-mpnet-base-v2",
 ))
 
-# --- User CSV upload ---
-st.sidebar.subheader("Data Input Method")
-source = st.sidebar.radio(
-    "Choose data source",
-    ["Use preprocessed CSV on server", "Upload my own CSV"],
-    index=1
-)
 
-uploaded_csv_path = None
-if source == "Upload my own CSV":
-    up = st.sidebar.file_uploader("Upload a CSV", type=["csv"])
-    if up is not None:
-        tmp_df = pd.read_csv(up)
-        col = _pick_text_column(tmp_df)
-        if col is None:
-            st.error("CSV must contain a text column such as: " + ", ".join(ACCEPTABLE_TEXT_COLUMNS))
-        else:
-            if col != "reflection_answer_english":
-                tmp_df = tmp_df.rename(columns={col: "reflection_answer_english"})
-            uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
-            tmp_df.to_csv(uploaded_csv_path, index=False)
-            st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
 
-# Choose final CSV path
-if source == "Upload my own CSV" and uploaded_csv_path is not None:
-    CSV_PATH = uploaded_csv_path
-else:
-    CSV_PATH = DATASETS[selected_dataset_name]
+
 
 # --- Device selection ---
-st.sidebar.header("Data Preparation")
+# st.sidebar.header("Data Preparation")
 selected_device = st.sidebar.radio(
     "Processing device",
     ["GPU (MPS)", "CPU"],
     index=0,
 )
 
-selected_granularity = st.sidebar.checkbox("Split reports into sentences", value=True)
-granularity_label = "sentences" if selected_granularity else "reports"
 
-# --- Subsample ---
-st.sidebar.header("Performance")
-subsample_perc = st.sidebar.slider("Subsample (%)", 10, 100, 100, 5)
 
 
 
@@ -449,6 +491,8 @@ if st.sidebar.button("Clear cached files for this configuration", use_container_
     except Exception as e:
         st.error(f"Failed to delete cache files: {e}")
 
+#add line break
+st.sidebar.markdown("---")
 
 
 
@@ -488,7 +532,16 @@ else:
         embeddings = embeddings[idx, :]   # keep it 2-D
         st.warning(f"Running analysis on {subsample_perc}% subsample ({len(docs)} documents)")
 
-    st.metric("Documents to Analyze", len(docs), granularity_label)
+    # st.metric("Documents to Analyze", len(docs), granularity_label)
+    # --- Dataset summary metrics ---
+    st.subheader("Dataset summary")
+    n_reports = count_clean_reports(CSV_PATH)  # total cleaned reports in CSV
+    unit = "sentences" if selected_granularity else "reports"
+    n_units = len(docs)                        # actual units analyzed
+
+    c1, c2 = st.columns(2)
+    c1.metric("Reports in CSV (cleaned)", n_reports)
+    c2.metric(f"Units analysed ({unit})", n_units)
 
     # --- Parameter controls ---
     st.sidebar.header("Model Parameters")

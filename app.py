@@ -114,7 +114,7 @@ for _k in ("MOSAIC_DATA", "MOSAIC_BOX"):
 # =====================================================================
 
 st.set_page_config(page_title="Advanced Topic Modeling", layout="wide")
-st.title("Topic Modelling Dashboard for Innerspeech Data (Upload or Use Preprocessed Data)")
+st.title("Topic Modelling Dashboard for Phenomenological Reports")
 
 ROOT = project_root()
 sys.path.append(str(ROOT / "MULTILINGUAL"))
@@ -184,6 +184,24 @@ def get_config_hash(cfg):
 @st.cache_data
 def perform_topic_modeling(_docs, _embeddings, config_hash):
     """Fit BERTopic using cached result."""
+
+    _docs = list(_docs)
+    _embeddings = np.asarray(_embeddings)
+    if _embeddings.dtype == object or _embeddings.ndim != 2:
+        try:
+            _embeddings = np.vstack(_embeddings)
+        except Exception:
+            st.error(f"Embeddings are invalid (dtype={_embeddings.dtype}, ndim={_embeddings.ndim}). "
+                     "Please click **Prepare Data** to regenerate.")
+            st.stop()
+    _embeddings = np.ascontiguousarray(_embeddings, dtype=np.float32)
+
+    if _embeddings.shape[0] != len(_docs):
+        st.error(f"Mismatch between docs and embeddings: len(docs)={len(_docs)} vs "
+                 f"embeddings.shape[0]={_embeddings.shape[0]}. "
+                 "Delete the cached files for this configuration and regenerate.")
+        st.stop()
+
     config = json.loads(config_hash)
 
     # Prepare vectorizer parameters
@@ -318,8 +336,10 @@ def generate_and_save_embeddings(csv_path, docs_file, emb_file,
         docs,
         show_progress_bar=True,
         batch_size=batch_size,
-        device=encode_device
+        device=encode_device,
+        convert_to_numpy=True
     )
+    embeddings = np.asarray(embeddings, dtype=np.float32)
     np.save(emb_file, embeddings)
 
     st.success("Embedding generation complete!")
@@ -389,6 +409,7 @@ subsample_perc = st.sidebar.slider("Subsample (%)", 10, 100, 100, 5)
 
 
 
+
 # =====================================================================
 # 7. Precompute filenames and pipeline triggers
 # =====================================================================
@@ -405,6 +426,29 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences):
 DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
     CSV_PATH, selected_embedding_model, selected_granularity
 )
+
+# --- Cache management (after DOCS_FILE / EMBEDDINGS_FILE exist) ---
+st.sidebar.markdown("### Cache")
+if st.sidebar.button("Clear cached files for this configuration", use_container_width=True):
+    try:
+        for p in (DOCS_FILE, EMBEDDINGS_FILE):
+            if os.path.exists(p):
+                os.remove(p)
+        # also clear Streamlit caches tied to these functions
+        try:
+            load_precomputed_data.clear()   # st.cache_data func
+        except Exception:
+            pass
+        try:
+            perform_topic_modeling.clear()  # st.cache_data func
+        except Exception:
+            pass
+
+        st.success("Deleted cached docs/embeddings and cleared caches. Click **Prepare Data** again.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Failed to delete cache files: {e}")
+
 
 
 
@@ -425,12 +469,23 @@ else:
     # Load cached data
     docs, embeddings = load_precomputed_data(DOCS_FILE, EMBEDDINGS_FILE)
 
+    # Coerce to 2-D float array even if saved as object
+    embeddings = np.asarray(embeddings)
+    if embeddings.dtype == object or embeddings.ndim != 2:
+        try:
+            embeddings = np.vstack(embeddings).astype(np.float32)
+        except Exception:
+            st.error("Cached embeddings are invalid. Please regenerate them for this configuration.")
+            st.stop()
+
     # Subsample
     if subsample_perc < 100:
         n = int(len(docs) * (subsample_perc / 100))
         idx = np.random.choice(len(docs), size=n, replace=False)
         docs = [docs[i] for i in idx]
-        embeddings = embeddings[idx]
+        # embeddings = embeddings[idx]
+        embeddings = np.asarray(embeddings)
+        embeddings = embeddings[idx, :]   # keep it 2-D
         st.warning(f"Running analysis on {subsample_perc}% subsample ({len(docs)} documents)")
 
     st.metric("Documents to Analyze", len(docs), granularity_label)
@@ -442,22 +497,22 @@ else:
 
     with st.sidebar.expander("Vectorizer"):
         ng_min = st.slider("Min N-gram", 1, 5, 1)
-        ng_max = st.slider("Max N-gram", 1, 5, 3)
+        ng_max = st.slider("Max N-gram", 1, 5, 2)
         min_df = st.slider("Min Doc Freq", 1, 50, 1)
         stopwords = st.select_slider("Stopwords", options=[None, "english"], value=None)
 
     with st.sidebar.expander("UMAP"):
         um_n = st.slider("n_neighbors", 2, 50, 15)
         um_c = st.slider("n_components", 2, 20, 5)
-        um_d = st.slider("min_dist", 0.0, 0.99, 0.0)
+        um_d = st.slider("min_dist", 0.0, 1.0, 0.0)
 
     with st.sidebar.expander("HDBSCAN"):
-        hs = st.slider("min_cluster_size", 10, 200, 40)
-        hm = st.slider("min_samples", 2, 100, 30)
+        hs = st.slider("min_cluster_size", 5, 100, 10)
+        hm = st.slider("min_samples", 2, 100, 5)
 
     with st.sidebar.expander("BERTopic"):
         nr_topics   = st.text_input("nr_topics", value="auto")
-        top_n_words = st.slider("top_n_words", 5, 25, 15)
+        top_n_words = st.slider("top_n_words", 5, 25, 10)
 
     # --- Build config ---
     current_config = {
@@ -516,6 +571,24 @@ else:
         st.session_state.history = load_history()
 
     if run_button:
+
+        if not isinstance(embeddings, np.ndarray):
+            embeddings = np.asarray(embeddings)
+
+        if embeddings.dtype == object or embeddings.ndim != 2:
+            try:
+                embeddings = np.vstack(embeddings).astype(np.float32)
+            except Exception:
+                st.error("Cached embeddings are invalid (object/ragged). Click **Prepare Data** to regenerate.")
+                st.stop()
+
+        if embeddings.shape[0] != len(docs):
+            st.error(f"len(docs)={len(docs)} but embeddings.shape[0]={embeddings.shape[0]}.\n"
+                    "Likely stale cache (e.g., switched sentences↔reports or model). "
+                    "Use the **Clear cache** button below and regenerate.")
+            st.stop()
+
+
         with st.spinner("Performing topic modeling..."):
             model, reduced, labels, n_topics, outlier_pct = perform_topic_modeling(
                 docs, embeddings, get_config_hash(current_config)

@@ -8,4 +8,9 @@ __pycache__/
 # caches
 .cache/
 
-MOSAICapp.code-workspace
+MOSAICapp.code-workspacedata/**/preprocessed/cache/
+eval/**/
+**/__pycache__/
+*.npy
+*.npz
+.DS_Store

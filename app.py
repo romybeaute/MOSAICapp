@@ -135,8 +135,18 @@ def count_clean_reports(csv_path: str) -> int:
 # 1. Streamlit app setup
 # =====================================================================
 
-st.set_page_config(page_title="Advanced Topic Modeling", layout="wide")
-st.title("Topic Modelling Dashboard for Phenomenological Reports")
+st.set_page_config(page_title="MOSAIC Dashboard", layout="wide")
+st.title("Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC): Topic Modelling Dashboard for Phenomenological Reports")
+
+# add if use, please cite the following paper:
+st.markdown(
+    """
+    _If you use this tool in your research, please cite the following paper:_\n
+    **Beauté, R., et al. (2025).**
+    **Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC): Topic Modelling and LLM applied to Stroboscopic Phenomenology**
+    https://arxiv.org/abs/2502.18318
+    """
+)
 
 # ROOT = project_root()
 # sys.path.append(str(ROOT / "MULTILINGUAL"))

@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.13.5-slim
 
 WORKDIR /app
 
@@ -35,7 +35,15 @@ COPY app.py ./
 
 EXPOSE 7860
 
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
+# HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
+HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health || exit 1
+
 
 # Run YOUR app.py file, with all flags
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.enableCORS=true", "--server.enableXsrfProtection=false"]
+# ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.enableCORS=true", "--server.enableXsrfProtection=false"]
+
+ENTRYPOINT ["bash", "-c", "streamlit run app.py \
+    --server.port=$PORT \
+    --server.address=0.0.0.0 \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false"]

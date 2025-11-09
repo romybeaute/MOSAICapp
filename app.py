@@ -23,7 +23,15 @@ import json
 
 # from mosaic.path_utils import CFG, raw_path, proc_path, eval_path, project_root
 
+NLTK_DATA_DIR = "/usr/local/share/nltk_data"
+if NLTK_DATA_DIR not in nltk.data.path:
+    nltk.data.path.append(NLTK_DATA_DIR)
+try:
+    nltk.data.find("tokenizers/punkt")
+except LookupError:
+    nltk.download("punkt", download_dir=NLTK_DATA_DIR)
 
+    
 try:
     from mosaic.path_utils import CFG, raw_path, proc_path, eval_path, project_root  # type: ignore
 except Exception:

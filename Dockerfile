@@ -1,49 +1,54 @@
-FROM python:3.13.5-slim
+# ---- Base image ----
+FROM python:3.11-slim
 
+# Workdir inside the container
 WORKDIR /app
 
-# Add 'unzip' to the list of programs to install
+# ---- System dependencies ----
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
     unzip \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# 1. Copy ONLY the requirements file first
+# ---- Python deps ----
 COPY requirements.txt ./
 
-# 2. Run pip install (this layer will now be cached)
-# We add your --extra-index-url fix back in, just in case
-RUN pip3 install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+# Torch / sentence-transformers like having the CPU wheel index explicitly
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements.txt
 
-# 3. Create the standard NLTK data directory
+# ---- NLTK data (punkt + stopwords) ----
 RUN mkdir -p /usr/local/share/nltk_data
 
-# 4. Download and unzip 'punkt'
-RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" -o /tmp/punkt.zip && \
+# punkt tokenizer
+RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" \
+      -o /tmp/punkt.zip && \
     unzip /tmp/punkt.zip -d /usr/local/share/nltk_data && \
     rm /tmp/punkt.zip
 
-# 5. Download and unzip 'stopwords'
-RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip" -o /tmp/stopwords.zip && \
+# stopwords corpus
+RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip" \
+      -o /tmp/stopwords.zip && \
     unzip /tmp/stopwords.zip -d /usr/local/share/nltk_data && \
     rm /tmp/stopwords.zip
 
-# 6. NOW copy the rest of your app
-COPY app.py ./
+# ---- Copy app code ----
+# If you only want app.py + data, you can narrow this, but copying all is fine.
+COPY . .
 
+# ---- Hugging Face port wiring ----
+ENV PORT=7860
 EXPOSE 7860
 
-# HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health || exit 1
+# Optional healthcheck; HF will just ignore failures but nice to have
+HEALTHCHECK CMD curl --fail http://localhost:${PORT}/_stcore/health || exit 1
 
-
-# Run YOUR app.py file, with all flags
-# ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.enableCORS=true", "--server.enableXsrfProtection=false"]
-
+# ---- Run Streamlit ----
 ENTRYPOINT ["bash", "-c", "streamlit run app.py \
-    --server.port=$PORT \
+    --server.port=${PORT} \
     --server.address=0.0.0.0 \
     --server.enableCORS=false \
     --server.enableXsrfProtection=false"]

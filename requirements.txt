@@ -3,7 +3,7 @@ torch
 streamlit>=1.37
 pandas
 numpy
-nltk==3.8.1
+nltk
 bertopic
 umap-learn
 hdbscan

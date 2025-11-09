@@ -1,28 +1,42 @@
-# Use a recent Python image
-FROM python:3.11-slim
+FROM python:3.13.5-slim
 
-# System deps (for things like hdbscan, numpy, etc.)
-RUN apt-get update && apt-get install -y \
-    build-essential \
- && rm -rf /var/lib/apt/lists/*
-
-# Set workdir
 WORKDIR /app
 
-# Install Python deps
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Add 'unzip' to the list of programs to install
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the rest of the app
-COPY . .
+# 1. Copy ONLY the requirements file first
+COPY requirements.txt ./
 
-# HF will route to port 7860; tell Streamlit to use it
-ENV PORT=7860
+# 2. Run pip install (this layer will now be cached)
+RUN pip3 install -r requirements.txt
 
-EXPOSE 7860
+# --- NEW NLTK FIX: Manual Download & Unzip ---
+# 3. Create the standard NLTK data directory
+RUN mkdir -p /usr/local/share/nltk_data
 
-CMD ["streamlit", "run", "app.py",
-     "--server.port=7860",
-     "--server.address=0.0.0.0",
-     "--server.enableCORS=false",
-     "--server.enableXsrfProtection=false"]
+# 4. Download and unzip 'punkt'
+RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt.zip" -o /tmp/punkt.zip && \
+    unzip /tmp/punkt.zip -d /usr/local/share/nltk_data && \
+    rm /tmp/punkt.zip
+
+# 5. Download and unzip 'stopwords'
+RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/stopwords.zip" -o /tmp/stopwords.zip && \
+    unzip /tmp/stopwords.zip -d /usr/local/share/nltk_data && \
+    rm /tmp/stopwords.zip
+# --- END OF FIX ---
+
+# 6. NOW copy the rest of your app
+COPY app.py ./
+
+EXPOSE 8501
+
+HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
+
+# Run YOUR app.py file, with all flags
+ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.enableCORS=true", "--server.enableXsrfProtection=false"]

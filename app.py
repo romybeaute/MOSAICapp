@@ -519,10 +519,17 @@ st.sidebar.header("Model Selection")
 
 
 
+# selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
+#     "intfloat/multilingual-e5-large-instruct",
+#     "Qwen/Qwen3-Embedding-0.6B",
+#     "BAAI/bge-small-en-v1.5",
+#     "sentence-transformers/all-mpnet-base-v2",
+# ))
+
 selected_embedding_model = st.sidebar.selectbox("Choose an embedding model", (
+    "BAAI/bge-small-en-v1.5",
     "intfloat/multilingual-e5-large-instruct",
     "Qwen/Qwen3-Embedding-0.6B",
-    "BAAI/bge-small-en-v1.5",
     "sentence-transformers/all-mpnet-base-v2",
 ))
 

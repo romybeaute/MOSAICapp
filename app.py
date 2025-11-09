@@ -120,13 +120,12 @@ def _pick_text_column(df: pd.DataFrame) -> str | None:
 
 
 def _list_text_columns(df: pd.DataFrame) -> list[str]:
-    """Return all columns that look text-like (object / string dtype)."""
-    text_cols: list[str] = []
-    for c in df.columns:
-        s = df[c]
-        if s.dtype == object or pd.api.types.is_string_dtype(s):
-            text_cols.append(c)
-    return text_cols
+    """
+    Return all columns; we’ll cast the chosen one to string later.
+    This makes the selector work with any column name / dtype.
+    """
+    return list(df.columns)
+
 
 
 def _set_from_env_or_secrets(key: str):
@@ -486,6 +485,12 @@ if CSV_PATH is None:
 @st.cache_data
 def get_text_columns(csv_path: str) -> list[str]:
     df_sample = pd.read_csv(csv_path, nrows=2000)
+    if not text_columns:
+        st.error(
+            "No columns found in this CSV. At least one column is required."
+        )
+        st.stop()
+
     return _list_text_columns(df_sample)
 
 

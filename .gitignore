@@ -31,4 +31,6 @@ data/*/preprocessed/cache/
 eval/
 !eval/.gitkeep
 !eval/**/.gitkeep
+#dev notes for me
+notex.txt 
 

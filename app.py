@@ -459,8 +459,21 @@ else:
         "After upload, you’ll be able to choose which text column to analyse."
     )
 
+    # if up is not None:
+    #     tmp_df = pd.read_csv(up)
+    #     if tmp_df.empty:
+    #         st.error("Uploaded CSV is empty.")
+    #         st.stop()
+
     if up is not None:
-        tmp_df = pd.read_csv(up)
+        try:
+            # Try loading as standard UTF-8
+            tmp_df = pd.read_csv(up)
+        except UnicodeDecodeError:
+            # If that fails (e.g., Excel/Windows CSV), try ISO-8859-1 (Latin-1)
+            up.seek(0)  # Reset file pointer to the beginning
+            tmp_df = pd.read_csv(up, encoding='ISO-8859-1')
+            
         if tmp_df.empty:
             st.error("Uploaded CSV is empty.")
             st.stop()

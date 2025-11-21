@@ -932,7 +932,7 @@ else:
             with cR:
                 st.download_button(
                     "Download CSV",
-                    data=export_csv.to_csv(index=False).encode("utf-8"),
+                    data=export_csv.to_csv(index=False).encode("utf-8-sig"),
                     file_name=csv_name,
                     mime="text/csv",
                     use_container_width=True,

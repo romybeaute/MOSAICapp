@@ -465,18 +465,48 @@ else:
     #         st.error("Uploaded CSV is empty.")
     #         st.stop()
 
+    # if up is not None:
+    #     try:
+    #         # Try loading as standard UTF-8
+    #         tmp_df = pd.read_csv(up)
+    #     except UnicodeDecodeError:
+    #         # If that fails (e.g., Excel/Windows CSV), try ISO-8859-1 (Latin-1)
+    #         up.seek(0)  # Reset file pointer to the beginning
+    #         tmp_df = pd.read_csv(up, encoding='ISO-8859-1')
+            
+    #     if tmp_df.empty:
+    #         st.error("Uploaded CSV is empty.")
+    #         st.stop()
+
     if up is not None:
-        try:
-            # Try loading as standard UTF-8
-            tmp_df = pd.read_csv(up)
-        except UnicodeDecodeError:
-            # If that fails (e.g., Excel/Windows CSV), try ISO-8859-1 (Latin-1)
-            up.seek(0)  # Reset file pointer to the beginning
-            tmp_df = pd.read_csv(up, encoding='ISO-8859-1')
+        # List of encodings to try: 
+        # 1. utf-8 (Standard)
+        # 2. mac_roman (Fixes the Õ and É issues from Mac Excel)
+        # 3. cp1252 (Standard Windows Excel)
+        encodings_to_try = ['utf-8', 'mac_roman', 'cp1252', 'ISO-8859-1']
+        
+        tmp_df = None
+        success_encoding = None
+
+        for encoding in encodings_to_try:
+            try:
+                up.seek(0)  # Always reset to start of file before trying
+                tmp_df = pd.read_csv(up, encoding=encoding)
+                success_encoding = encoding
+                break  # If we get here, it worked, so stop the loop
+            except UnicodeDecodeError:
+                continue  # If it fails, try the next one
+
+        if tmp_df is None:
+            st.error("Could not decode file. Please save your CSV as 'CSV UTF-8' in Excel.")
+            st.stop()
             
         if tmp_df.empty:
             st.error("Uploaded CSV is empty.")
             st.stop()
+            
+        # Optional: Print which encoding worked to the logs (for your info)
+        print(f"Successfully loaded CSV using {success_encoding} encoding.")
 
         # Just save; we’ll choose the text column later
         uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())

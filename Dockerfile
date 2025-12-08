@@ -1,3 +1,43 @@
+# ---- Base image ----
+FROM python:3.11-slim
+
+# Workdir inside the container
+WORKDIR /app
+
+# ---- System dependencies (Lightweight) ----
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Python deps ----
+COPY requirements.txt .
+
+# ---- STEP 1: Install LLM Engine (Force Pre-built Binary) ----
+# We run this BEFORE requirements.txt to ensure the pre-built wheel is prioritized.
+# The --prefer-binary flag stops it from trying to compile from source.
+RUN pip install --no-cache-dir \
+    --prefer-binary \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+    llama-cpp-python
+
+# ---- STEP 2: Install Remaining Packages ----
+# Now install everything else from requirements.txt
+RUN pip install --no-cache-dir \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r requirements.txt
+
+# ---- NLTK data ----
+RUN python -c "import nltk; nltk.download('punkt_tab'); nltk.download('punkt'); nltk.download('stopwords')"
+
+# ---- Copy application files ----
+COPY . .
+
+# ---- Command to run the app ----
+# Defaulting to Lite mode. Change 'app.py' to 'app_with_LLM.py' in README to switch.
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+
+
 # # ---- Base image ----
 # FROM python:3.11-slim
 
@@ -60,39 +100,3 @@
 #     --server.enableCORS=false \
 #     --server.enableXsrfProtection=false"]
 
-
-
-
-
-# ---- Base image ----
-FROM python:3.11-slim
-
-# Workdir inside the container
-WORKDIR /app
-
-# ---- System dependencies (Lightweight) ----
-# We removed cmake/gcc because we will use pre-built wheels
-RUN apt-get update && apt-get install -y \
-    curl \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# ---- Python deps ----
-COPY requirements.txt .
-
-# ---- Install Python Packages ----
-# We add a 2nd URL to 'abetlen' to find the pre-built LLM wheel
-RUN pip install --no-cache-dir \
-    --extra-index-url https://download.pytorch.org/whl/cpu \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
-    -r requirements.txt
-
-# ---- NLTK data (punkt + stopwords) ----
-RUN python -c "import nltk; nltk.download('punkt_tab'); nltk.download('punkt'); nltk.download('stopwords')"
-
-# ---- Copy application files ----
-COPY . .
-
-# ---- Command to run the app ----
-# We default to the Lite app. Change to app_with_LLM.py in README to switch.
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]

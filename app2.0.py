@@ -256,18 +256,4 @@ if CSV_PATH:
             config = {
                 "umap_params": {"n_neighbors": 15, "n_components": 5, "min_dist": 0.0},
                 "hdbscan_params": {"min_cluster_size": 10, "min_samples": 5},
-                "vectorizer_params": {"ngram_range": (1, 2), "stop_words": "english"},
-                "bt_params": {"nr_topics": nr_topics, "top_n_words": 10},
-                "use_vectorizer": True,
-                "use_llm": ENABLE_LLM  # <--- PASS THE SWITCH HERE
-            }
-            
-            model, reduced, labels, n_topics, outlier_pct = perform_topic_modeling(
-                docs, embeddings, get_config_hash(config)
-            )
-            
-            # Results
-            st.success(f"Found {n_topics} topics.")
-            fig, _ = datamapplot.create_plot(reduced, labels)
-            st.pyplot(fig)
-            st.dataframe(model.get_topic_info())
+                "

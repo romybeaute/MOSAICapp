@@ -4,9 +4,19 @@ FROM python:3.11-slim
 # Workdir inside the container
 WORKDIR /app
 
+# # ---- System dependencies ----
+# RUN apt-get update && apt-get install -y \
+#     build-essential \
+#     curl \
+#     git \
+#     unzip \
+#  && rm -rf /var/lib/apt/lists/*
+
+
 # ---- System dependencies ----
 RUN apt-get update && apt-get install -y \
-    build-essential \
+    build-essential \ 
+    cmake \
     curl \
     git \
     unzip \

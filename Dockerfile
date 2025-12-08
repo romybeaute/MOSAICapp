@@ -34,7 +34,7 @@ RUN python -c "import nltk; nltk.download('punkt_tab'); nltk.download('punkt'); 
 COPY . .
 
 # ---- Command to run the app ----
-# Defaulting to Lite mode. Change 'app.py' to 'app_with_LLM.py' in README to switch.
+# TO SWITCH VERSIONS: Change "app.py" to "app_with_LLM.py" in the line below.
 CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
 
 

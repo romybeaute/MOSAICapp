@@ -7,7 +7,8 @@ nltk
 bertopic
 umap-learn
 hdbscan
-scikit-learn
+#scikit-learn
+scikit-learn<1.6 #for LLM
 sentence-transformers
 datamapplot
 huggingface_hub

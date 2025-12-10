@@ -1090,7 +1090,13 @@ else:
             )
             
             cA, cB, cC = st.columns([1, 1, 2])
-            max_topics = cA.slider("Max topics", 5, 120, 40, 5)
+            # max_topics = cA.slider("Max topics", 5, 120, 40, 5)
+            topic_info = tm.get_topic_info()
+            n_topics_no_outliers = int((topic_info.Topic != -1).sum())
+            max_topics = n_topics_no_outliers
+            st.caption(f"Will label all topics (excluding outliers): {max_topics}")
+
+            
             force = cB.checkbox("Force regenerate", value=False)
             
             if cC.button("Generate LLM labels (API)", use_container_width=True):
@@ -1114,10 +1120,23 @@ else:
             default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
             api_map = st.session_state.get("llm_names", {}) or {}
             final_name_map = {**default_map, **api_map}
-            final_name_map[-1] = "Outliers"
+
+            #option to choose to include outliers or not
+            include_outliers_plot = st.checkbox("Include outliers in plot (-1)", value=False)
+
+            topics_arr = np.asarray(tm.topics_)
+            labs_all = [final_name_map.get(int(t), "Unlabelled") for t in topics_arr]
+            if include_outliers_plot:
+                final_name_map[-1] = "Outliers"
+                reduced_plot = reduced
+                labs = labs_all
+            else:
+                mask = topics_arr != -1
+                reduced_plot = reduced[mask]
+                labs = list(np.asarray(labs_all)[mask])
 
             
-            labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
+            # labs = [final_name_map.get(t, "Unlabelled") for t in tm.topics_]
             ##### ADDED FOR LLM (END)
             
             

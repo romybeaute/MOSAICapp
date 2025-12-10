@@ -12,5 +12,6 @@ sentence-transformers
 datamapplot
 huggingface_hub
 matplotlib
+huggingface_hub
 # llama-cpp-python
 # https://github.com/romybeaute/MOSAIC/tree/mosaic2.1/src/mosaic

@@ -1,0 +1,28 @@
+
+prompt = """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are an expert phenomenologist analysing subjective reflexions from specific experiences. Your task is to label a cluster of similar experiential reports.
+
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Here is a cluster of participant reports describing a specific phenomenon:
+[DOCUMENTS]
+
+Top keywords associated with this cluster:
+[KEYWORDS]
+
+Task: Generate a single, scientifically precise label (3-7 words) for this experiential topic.
+
+The title should be:
+1. HIGHLY SPECIFIC to the experiential characteristic unique to this "phenomenological" cluster
+2. PHENOMENOLOGICALLY DESCRIPTIVE (focus on *what* was felt/seen).
+3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
+4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
+5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
+
+
+Constraints:
+1. Do not explain your reasoning
+2. Output ONLY the label, and NOTHING ELSE
+3. Only return the label itself, without any additional text or punctuation
+
+<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+Label:"""

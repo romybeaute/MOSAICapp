@@ -26,6 +26,9 @@ from huggingface_hub import InferenceClient # for the LLM API command
 
 from typing import Any
 
+from io import BytesIO #Download button for the clustering image
+
+
 
 
 
@@ -312,11 +315,13 @@ The title should be:
 3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
 4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
 5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
+6. CONCISE and NOUN-PHRASE LIKE (e.g. "body boundary dissolution", not "Experience of body boundary dissolution").
 
 
 Constraints:
 - Output ONLY the label (no explanation).
 - 3–7 words.
+- Avoid generic wrappers such as "experience of", "phenomenon of", "state of" unless they are absolutely necessary.
 - No punctuation, no quotes, no extra text.
 - Do not explain your reasoning
 """
@@ -339,6 +344,23 @@ def _clean_label(x: str) -> str:
     x = re.sub(r"[.:\-–—]+$", "", x).strip()  # remove trailing punctuation
     # enforce "no punctuation" lightly (optional):
     x = re.sub(r"[^\w\s]", "", x).strip()
+    # Optional: de-wrap generic "experience/phenomenon/state" wrappers
+    # Leading patterns like "Experiential/Experience of ..."
+    x = re.sub(
+        r"^(Experiential(?:\s+Phenomenon)?|Experience|Experience of|Subjective Experience of|Phenomenon of)\s+",
+        "",
+        x,
+        flags=re.IGNORECASE,
+    )
+    # Trailing "experience/phenomenon/state"
+    x = re.sub(
+        r"\s+(experience|experiences|phenomenon|state|states)$",
+        "",
+        x,
+        flags=re.IGNORECASE,
+    )
+
+    x = x.strip()
     return x or "Unlabelled"
 
 
@@ -350,7 +372,7 @@ def generate_labels_via_chat_completion(
     config_hash: str,
     model_id: str = "meta-llama/Meta-Llama-3-8B-Instruct",
     max_topics: int = 50,
-    max_docs_per_topic: int = 8,
+    max_docs_per_topic: int = 10,
     doc_char_limit: int = 400,
     temperature: float = 0.2, #deterministic, stable outputs.
     force: bool = False) -> dict[int, str]:
@@ -1057,7 +1079,7 @@ else:
 
     with st.sidebar.expander("BERTopic"):
         nr_topics = st.text_input("nr_topics", value="auto")
-        top_n_words = st.slider("top_n_words", 5, 25, 10)
+        top_n_words = st.slider("top_n_words", 5, 25, 10, help="for a number N selected, BERTopic with fill the N most statistically significant words for that cluster")
 
     current_config = {
         "embedding_model": selected_embedding_model,
@@ -1246,12 +1268,21 @@ else:
                     st.caption("No example prompt stored yet – run LLM labelling to populate this.")
             
             cA, cB, cC = st.columns([1, 1, 2])
-            max_topics = cA.slider("Max topics", 5, 120, 40, 5)
-            # topic_info = tm.get_topic_info()
-            # n_topics_no_outliers = int((topic_info.Topic != -1).sum())
-            # max_topics = n_topics_no_outliers
-            # st.caption(f"Will label all topics (excluding outliers): {max_topics}")
 
+            with cA:
+                max_topics = st.slider("Max topics", 5, 120, 40, 5)
+            # max_topics = cA.slider("Max topics", 5, 120, 40, 5)
+
+            with cB:
+                max_docs_per_topic = st.slider(
+                    "Docs per topic",
+                    min_value=2,
+                    max_value=20,
+                    value=10,
+                    step=1,
+                    help="How many representative sentences per topic to show the LLM."
+                )
+                force = st.checkbox("Force regenerate", value=False)
             
             force = cB.checkbox("Force regenerate", value=False)
             
@@ -1264,6 +1295,7 @@ else:
                         config_hash=cfg_hash,
                         model_id=model_id,
                         max_topics=max_topics,
+                        max_docs_per_topic=max_docs_per_topic,
                         force=force,
                     )
                     st.session_state.llm_names = llm_names
@@ -1290,23 +1322,7 @@ else:
             api_map = st.session_state.get("llm_names", {}) or {}
             llm_names = {**default_map, **api_map}
 
-            # #option to choose to include outliers or not
-            # include_outliers_plot = st.checkbox("Include outliers in plot (-1)", value=False)
-            # topics_arr = np.asarray(tm.topics_)
-            # labs_all = [final_name_map.get(int(t), "Unlabelled") for t in topics_arr]
-            # if include_outliers_plot:
-            #     final_name_map[-1] = "Outliers"
-            #     reduced_plot = reduced
-            #     labs = labs_all
-            # else:
-            #     mask = topics_arr != -1
-            #     reduced_plot = reduced[mask]
-            #     labs = list(np.asarray(labs_all)[mask])
 
-
-
-
-            #try remove -1 outliers topics 
 
             # FIX: Force outliers (Topic -1) to be "Unlabelled" so we can hide them
             labs = []
@@ -1318,6 +1334,10 @@ else:
             
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
+
+            # Build a nice title from the dataset name
+            dataset_title = ds_input.strip() or DATASET_DIR
+            plot_title = f"{dataset_title}: MOSAIC's Experiential Topic Map"
             
             # We pass 'noise_label' and 'noise_color' to grey out the outliers
             fig, _ = datamapplot.create_plot(
@@ -1328,16 +1348,41 @@ else:
                 label_font_size=11,        # Optional: Adjust font size
                 arrowprops={"arrowstyle": "-", "color": "#333333"} # Optional: darker, simpler arrows
             )
+            fig.suptitle(plot_title, fontsize=16, y=0.99)
             st.pyplot(fig)
 
+            # --- Download / save visualisation ---
+
+            # Prepare high-res PNG bytes
+            buf = BytesIO()
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+            png_bytes = buf.getvalue()
             
-            # labs = [llm_names.get(t, "Unlabelled") for t in tm.topics_]
-            # ##### ADDED FOR LLM (END)
+            # Reuse base / gran for a nice filename later (they’re defined below as well)
+            base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            gran = "sentences" if selected_granularity else "reports"
+            png_name = f"topics_{base}_{gran}_plot.png"
             
-            # # VISUALISATION
-            # st.subheader("Experiential Topics Visualisation")
-            # fig, _ = datamapplot.create_plot(reduced, labs)
-            # st.pyplot(fig)
+            dl_col, save_col = st.columns(2)
+            
+            with dl_col:
+                st.download_button(
+                    "Download visualisation as PNG",
+                    data=png_bytes,
+                    file_name=png_name,
+                    mime="image/png",
+                    use_container_width=True,
+                )
+            with save_col:
+                if st.button("Save plot to eval/", use_container_width=True):
+                    try:
+                        plot_path = (EVAL_DIR / png_name).resolve()
+                        fig.savefig(plot_path, format="png", dpi=300, bbox_inches="tight")
+                        st.success(f"Saved plot → {plot_path}")
+                    except Exception as e:
+                        st.error(f"Failed to save plot: {e}")
+
+
 
             
 
@@ -1346,27 +1391,6 @@ else:
 
             st.subheader("Export results (one row per topic)")
 
-            # full_reps = tm.get_topics(full=True)
-            # llm_reps = full_reps.get("LLM", {})
-
-            # llm_names = {}
-            # for tid, vals in llm_reps.items():
-            #     try:
-            #         llm_names[tid] = (
-            #             (vals[0][0] or "").strip().strip('"').strip(".")
-            #         )
-            #     except Exception:
-            #         llm_names[tid] = "Unlabelled"
-
-            # if not llm_names:
-            #     st.caption("Note: Using default keyword-based topic names.")
-            #     llm_names = (
-            #         tm.get_topic_info().set_index("Topic")["Name"].to_dict()
-            #     )
-
-            # default_map = tm.get_topic_info().set_index("Topic")["Name"].to_dict()
-            # api_map = st.session_state.get("llm_names", {}) or {}
-            # llm_names = {**default_map, **api_map}
 
             model_docs = getattr(tm, "docs_", None)
             if model_docs is not None and len(docs) != len(model_docs):
@@ -1375,8 +1399,6 @@ else:
                     "The current dataset size is different (e.g. sampling/splitting changed), "
                     "so you may want to re-run topic modelling before exporting."
                 )
-
-            # doc_info = tm.get_document_info()[["Document", "Topic"]]
 
             doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
 

@@ -1240,14 +1240,44 @@ else:
             #     mask = topics_arr != -1
             #     reduced_plot = reduced[mask]
             #     labs = list(np.asarray(labs_all)[mask])
-    
-            labs = [llm_names.get(t, "Unlabelled") for t in tm.topics_]
-            ##### ADDED FOR LLM (END)
+
+
+
+
+            #try remove -1 outliers topics 
+
+            # FIX: Force outliers (Topic -1) to be "Unlabelled" so we can hide them
+            labs = []
+            for t in tm.topics_:
+                if t == -1:
+                    labs.append("Unlabelled")
+                else:
+                    labs.append(llm_names.get(t, "Unlabelled"))
             
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
-            fig, _ = datamapplot.create_plot(reduced, labs)
+            
+            # We pass 'noise_label' and 'noise_color' to grey out the outliers
+            fig, _ = datamapplot.create_plot(
+                reduced,
+                labs,
+                noise_label="Unlabelled",  # Tells datamapplot: "Do not put a text label on this group"
+                noise_color="#CCCCCC",     # Sets the points to a light Grey
+                label_font_size=11,        # Optional: Adjust font size
+                arrowprops={"arrowstyle": "-", "color": "#333333"} # Optional: darker, simpler arrows
+            )
             st.pyplot(fig)
+
+            
+            # labs = [llm_names.get(t, "Unlabelled") for t in tm.topics_]
+            # ##### ADDED FOR LLM (END)
+            
+            # # VISUALISATION
+            # st.subheader("Experiential Topics Visualisation")
+            # fig, _ = datamapplot.create_plot(reduced, labs)
+            # st.pyplot(fig)
+
+            
 
             st.subheader("Topic Info")
             st.dataframe(tm.get_topic_info())

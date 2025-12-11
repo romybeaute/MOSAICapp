@@ -24,6 +24,7 @@ import json
 # from huggingface_hub import hf_hub_download, InferenceClient # for the LLM API command
 from huggingface_hub import InferenceClient # for the LLM API command
 
+from typing import Any
 
 
 
@@ -1173,7 +1174,9 @@ else:
             llm_names = {**default_map, **api_map}
 
 
-            doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
+            # doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
+            doc_info = tm.get_document_info()[["Document", "Topic"]] ## Use the documents stored inside the BERTopic model
+            # to avoid length mismatches if `docs` changes after the run
 
             include_outliers = st.checkbox(
                 "Include outlier topic (-1)", value=False

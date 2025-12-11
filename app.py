@@ -349,10 +349,10 @@ def generate_labels_via_chat_completion(
     docs: list[str],
     config_hash: str,
     model_id: str = "meta-llama/Meta-Llama-3-8B-Instruct",
-    max_topics: int = 40,
+    max_topics: int = 50,
     max_docs_per_topic: int = 8,
-    doc_char_limit: int = 300,
-    temperature: float = 0.2,
+    doc_char_limit: int = 400,
+    temperature: float = 0.2, #deterministic, stable outputs.
     force: bool = False) -> dict[int, str]:
     """
     Label topics AFTER fitting (fast + stable on Spaces).
@@ -427,7 +427,7 @@ def generate_labels_via_chat_completion(
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=24,
+                max_tokens=24, #Upper bound on how many tokens the model is allowed to generate as output for that label
                 temperature=temperature,
                 stop=["\n"],
             )

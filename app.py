@@ -887,6 +887,7 @@ selected_embedding_model = st.sidebar.selectbox(
         "Qwen/Qwen3-Embedding-0.6B",
         "sentence-transformers/all-mpnet-base-v2",
     ),
+    help="Unsure which model to pick? Check the [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard) for performance on Clustering tasks."
 )
 
 selected_device = st.sidebar.radio(

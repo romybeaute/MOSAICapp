@@ -381,26 +381,49 @@ def _hf_status_code(e: Exception) -> int | None:
     resp = getattr(e, "response", None)
     return getattr(resp, "status_code", None)
 
+SYSTEM_PROMPT = """You are an expert phenomenologist analysing first-person experiential reports or microphenomenological interviews.
 
-SYSTEM_PROMPT = """You are an expert phenomenologist analysing subjective reflections from specific experiences.
-Your task is to label a cluster of similar experiential reports.
+Your task is to assign a concise label to a cluster of similar reports by identifying the
+shared lived experiential structure or process they describe.
 
-The title should be:
-1. HIGHLY SPECIFIC to the experiential characteristic unique to this "phenomenological" cluster
-2. PHENOMENOLOGICALLY DESCRIPTIVE (focus on *what* was felt/seen).
-3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
-4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
-5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
-6. CONCISE and NOUN-PHRASE LIKE (e.g. "body boundary dissolution", not "Experience of body boundary dissolution").
-
+The label must:
+1. Describe what changes in experience itself (e.g. boundaries, temporality, embodiment, agency, affect, meaning).
+2. Capture the underlying experiential process or structural transformation, not surface narrative details.
+3. Be specific and distinctive, but at the level of experiential structure rather than anecdotal content.
+4. Use phenomenological language that describes how cognitive, affective, or perceptual processes are lived, rather than analytic or evaluative abstractions.
+5. Be conceptually focused on a single dominant experiential pattern.
+6. Be concise and noun-phrase-like.
 
 Constraints:
 - Output ONLY the label (no explanation).
-- 3–7 words.
-- Avoid generic wrappers such as "experience of", "phenomenon of", "state of" unless they are absolutely necessary.
+- 3–8 words.
+- Avoid surface-specific details unless they reflect a recurring experiential structure.
+- Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, evaluation) unless they directly describe how the process is experienced.
+- Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
 - No punctuation, no quotes, no extra text.
-- Do not explain your reasoning
+- Do not explain your reasoning.
 """
+
+    
+# SYSTEM_PROMPT = """You are an expert phenomenologist analysing subjective reflections from specific experiences.
+# Your task is to label a cluster of similar experiential reports.
+
+# The title should be:
+# 1. HIGHLY SPECIFIC to the experiential characteristic unique to this "phenomenological" cluster
+# 2. PHENOMENOLOGICALLY DESCRIPTIVE (focus on *what* was felt/seen).
+# 3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
+# 4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
+# 5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
+# 6. CONCISE and NOUN-PHRASE LIKE (e.g. "body boundary dissolution", not "Experience of body boundary dissolution").
+
+
+# Constraints:
+# - Output ONLY the label (no explanation).
+# - 3–7 words.
+# - Avoid generic wrappers such as "experience of", "phenomenon of", "state of" unless they are absolutely necessary.
+# - No punctuation, no quotes, no extra text.
+# - Do not explain your reasoning
+# """
 
 
 USER_TEMPLATE = """Here is a cluster of participant reports describing a specific phenomenon:

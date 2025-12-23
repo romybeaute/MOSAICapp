@@ -724,14 +724,18 @@ def generate_and_save_embeddings(
 
         if min_words and min_words > 0:
             docs = [s for s in sentences if len(s.split()) >= min_words]
+            removed_texts = [s for s in sentences if len(s.split()) < min_words]
         else:
             docs = sentences
+            removed_texts = []
     else:
         total_units_before = len(reports)
         if min_words and min_words > 0:
             docs = [r for r in reports if len(str(r).split()) >= min_words]
+            removed_texts = [r for r in reports if len(str(r).split()) < min_words]
         else:
             docs = reports
+            removed_texts = []
 
     total_units_after = len(docs)
     removed_units = total_units_before - total_units_after
@@ -744,8 +748,11 @@ def generate_and_save_embeddings(
         "total_after": int(total_units_after),
         "removed": int(removed_units),
     }
+    # keep removed texts so the UI can show them
+    st.session_state["last_removed_units"] = removed_texts
 
     if min_words and min_words > 0:
+        
         st.info(
             f"Preprocessing: started with {total_units_before} {granularity_label}, "
             f"removed {removed_units} shorter than {min_words} words; "
@@ -1130,6 +1137,26 @@ else:
         preview_df = pd.DataFrame({"text": docs[:10]})
         st.dataframe(preview_df)
 
+        removed = st.session_state.get("last_removed_units", [])
+        with st.expander(f"Preview removed units ({len(removed)})"):
+            if not removed:
+                st.caption("No units removed for the current min-words setting.")
+            else:
+                n_show = st.slider("How many removed units to show", 10, min(500, len(removed)), 50)
+                df_removed = pd.DataFrame({
+                    "n_words": [len(str(x).split()) for x in removed[:n_show]],
+                    "text": removed[:n_show],
+                })
+                st.dataframe(df_removed, use_container_width=True)
+        
+                st.download_button(
+                    "Download removed units (txt)",
+                    data="\n".join(map(str, removed)),
+                    file_name="removed_units.txt",
+                    mime="text/plain",
+                )
+
+
 
     # --- Parameter controls ---
     st.sidebar.header("Model Parameters")
@@ -1237,6 +1264,9 @@ else:
                 docs, embeddings, get_config_hash(current_config)
             )
         st.session_state.latest_results = (model, reduced, labels)
+        # Store the exact docs used to fit this model (so export never mismatches)
+        st.session_state.latest_docs = docs
+        st.session_state.latest_csv_path = CSV_PATH
 
         # --- AUTO-SAVE RUN SNAPSHOT (plot + stats + topic_info) ---
         run_id = make_run_id(current_config)
@@ -1276,6 +1306,9 @@ else:
                 if ("Unlabelled" not in name and "outlier" not in name)
             ],
         }
+        dataset_title = ds_input.strip() or DATASET_DIR
+        entry["dataset_title"] = dataset_title
+        entry["csv_path"] = CSV_PATH
 
         st.session_state.history.insert(0, entry)
         save_history(st.session_state.history)
@@ -1503,7 +1536,27 @@ else:
                     "so you may want to re-run topic modelling before exporting."
                 )
 
-            doc_info = tm.get_document_info(docs)[["Document", "Topic"]]
+            # Always export using the same docs the model was trained on
+            docs_for_export = st.session_state.get("latest_docs", None)
+            
+            # Fallback if session_state was cleared
+            if docs_for_export is None:
+                docs_for_export = getattr(tm, "docs_", None)
+            
+            # Final fallback (won't usually be needed)
+            if docs_for_export is None:
+                docs_for_export = docs
+            
+            # Hard safety check to prevent the ValueError
+            if len(docs_for_export) != len(tm.topics_):
+                st.error(
+                    "Cannot export: the current docs don't match the model (dataset / subsample / filter changed). "
+                    "Please re-run **Run Analysis** for the current configuration."
+                )
+                st.stop()
+            
+            doc_info = tm.get_document_info(docs_for_export)[["Document", "Topic"]]
+
 
             include_outliers = st.checkbox(
                 "Include outlier topic (-1)", value=False
@@ -1637,9 +1690,16 @@ else:
         if not hist:
             st.info("No runs yet.")
         else:
+            # dataset selector
+            dataset_options = sorted({e.get("dataset_title", "Unknown") for e in hist})
+            chosen_ds = st.selectbox("Dataset", dataset_options)
+    
+            hist_ds = [e for e in hist if e.get("dataset_title", "Unknown") == chosen_ds]
+
+            
             # Table view
             rows = []
-            for e in hist:
+            for e in hist_ds:
                 cfg = e.get("config", {}) or {}
                 rows.append({
                     "run_id": e.get("run_id", ""),

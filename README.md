@@ -36,3 +36,26 @@ python -c "import nltk; nltk.download('punkt')"
 
 # Run the app
 streamlit run app.py
+
+# ---------------------------------------
+
+
+### Library Usage (Advanced)
+For researchers wishing to run MOSAIC programmatically (e.g., on a computer cluster), 
+you can import the core logic directly:
+
+```python
+from mosaic_core.analysis import preprocess_and_embed, run_topic_model
+
+# 1. Load and Embed
+docs, embeddings = preprocess_and_embed("my_data.csv", text_col="report")
+
+# 2. Configure
+config = {
+    "umap_params": {"n_neighbors": 15, "n_components": 5},
+    "hdbscan_params": {"min_cluster_size": 10},
+    "bt_params": {"nr_topics": "auto"}
+}
+
+# 3. Run Analysis
+model, reduced_data, topics = run_topic_model(docs, embeddings, config)

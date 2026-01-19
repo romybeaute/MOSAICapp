@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "MOSAIC-app: Interactive Topic Modelling for Phenomenological Reports"
+version: 1.0.0
+date-released: 2026-01-19
+url: "https://github.com/romybeaute/MOSAICapp"
+repository-code: "https://github.com/romybeaute/MOSAICapp"
+license: MIT
+authors:
+  - family-names: "Beauté"
+    given-names: "Romy"
+    orcid: "https://orcid.org/0009-0006-4548-5349"
+    affiliation: "Sussex Centre for Consciousness Science, University of Sussex, UK"
+keywords:
+  - topic modelling
+  - phenomenology
+  - consciousness research
+  - NLP
+  - BERTopic
+  - natural language processing
+abstract: >-
+  MOSAIC-app is an interactive web application that enables researchers 
+  to apply transformer-based topic modelling to phenomenological free-text 
+  reports without requiring programming expertise.

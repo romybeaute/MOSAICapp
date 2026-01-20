@@ -10,7 +10,7 @@ pytest tests/ -v
 pytest tests/test_core_functions.py -v
 
 
-#Which tests to run:
+# Which tests to run:
 
 ### Test utility functions (fast)
 pytest tests/test_core_functions.py -v

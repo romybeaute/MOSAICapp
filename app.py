@@ -34,6 +34,20 @@ from datetime import datetime
 
 
 
+
+#to remove funciton locally defined here, we can use importing from mosaic_core
+# from mosaic_core.core_functions import (
+#     pick_text_column, list_text_columns, slugify, clean_label,
+#     get_config_hash, make_run_id, cleanup_old_cache,
+#     load_csv_texts, count_clean_reports, preprocess_texts,
+#     run_topic_model, get_topic_labels, get_outlier_stats, get_num_topics,
+#     SYSTEM_PROMPT, USER_TEMPLATE, generate_llm_labels,
+#     labels_cache_path, load_cached_labels, save_labels_cache,
+#     get_hf_status_code,
+# )
+
+
+
 # =====================================================================
 # NLTK setup
 # =====================================================================

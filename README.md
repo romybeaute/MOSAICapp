@@ -31,13 +31,31 @@ The tool is designed for consciousness researchers, phenomenologists, and qualit
 - **LLM topic labelling** — automatic generation of interpretable labels (full version)
 - **Python API** — `mosaic_core` library for programmatic use and batch processing
 
-## Installation
 
-### Web app (no installation)
 
-Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)
+---
 
-### Local installation
+## 1. Quick Start (No Installation)
+
+The easiest way to use MOSAICapp is via the hosted web interface. No coding or installation is required.
+
+**[Launch MOSAICapp on Hugging Face](https://huggingface.co/spaces/romybeaute/MOSAICapp)**
+
+*Note: The hosted version runs on shared resources. For large datasets or privacy-sensitive data, we recommend the local installation below.*
+
+
+---
+
+## 2. Local Installation
+
+Run the app on your own machine to use custom GPUs, process sensitive data locally, or modify the code.
+
+### Prerequisites
+- Python 3.9+
+- Git
+
+
+### Setup steps
 
 ```bash
 git clone https://github.com/romybeaute/MOSAICapp.git
@@ -53,36 +71,106 @@ pip install .
 
 # Download NLTK data (required for segmentation)
 python -c "import nltk; nltk.download('punkt')"
+```
 
-# Run the app
+---
+
+## 3. Configuration & Running
+
+
+### Run the app
+```
 streamlit run app.py
 ```
 
-### Library usage
+### LLM Setup (Optional)
+To use the Automated Topic Labelling feature (Llama-3), you must provide a Hugging Face Access Token. The app uses this token to access the inference API.
 
+1. Get a Token: Log in to Hugging Face and create a token with "Read" permissions.
+
+2. Configure Local App:
+
+- Create a folder named .streamlit in your root directory.
+
+- Inside it, create a file named secrets.toml.
+
+- Add your token in TOML file:
+```
+HF_TOKEN = "hf_..."
+```
+
+- Note: This file is ignored by Git to protect your credentials.
+
+
+---
+
+## 4. Running Tests
+We include a test suite to verify the installation and core logic. This is useful to check if your environment is set up correctly.
+
+**Run everything:**
+```bash
+pytest tests/ -v
+```
+
+**Run only fast tests:**
+```bash
+pytest tests/test_core_functions.py -v
+```
+
+This will automatically load a dummy dataset included in the repo and verify:
+
+- Data loading (CSV parsing)
+
+- Embedding generation
+
+- Topic modelling pipeline
+
+- Visualisation outputs
+
+---
+
+## 5. Python API (Advanced Usage)
+MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
+
+### Library usage
 ```python
 from mosaic_core.core_functions import preprocess_and_embed, run_topic_model
 
+# 1. Load and Preprocess
 docs, embeddings = preprocess_and_embed("data.csv", text_col="report")
 
+# 2. Configure Parameters
 config = {
     "umap_params": {"n_neighbors": 15, "n_components": 5},
     "hdbscan_params": {"min_cluster_size": 10},
     "bt_params": {"nr_topics": "auto"}
 }
 
+# 3. Run Model
 model, reduced_embeddings, topics = run_topic_model(docs, embeddings, config)
 ```
+
+
+
+
 
 ## Input format
 
 CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
+
+
+---
+
 
 ## How it works
 
 MOSAICapp implements a BERTopic pipeline: texts are embedded using sentence transformers, reduced with UMAP, clustered with HDBSCAN, and labelled using c-TF-IDF (with optional LLM refinement). This approach captures semantic context better than older bag-of-words methods like LDA.
 
 For methodological details, see the [MOSAIC paper](https://arxiv.org/abs/2502.18318).
+
+
+
+---
 
 ## Research applications
 
@@ -109,17 +197,7 @@ MOSAICapp has been used to analyse:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggesting features, and contributing code.
 
-## Tests
 
-**Run everything:**
-```bash
-pytest tests/ -v
-```
-
-**Run only fast tests:**
-```bash
-pytest tests/test_core_functions.py -v
-```
 
 ## License
 

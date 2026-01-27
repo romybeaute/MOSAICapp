@@ -1,61 +1,102 @@
----
-title: MOSAICapp
-colorFrom: indigo
-colorTo: blue
-sdk: docker
-pinned: false
----
+# MOSAICapp
 
-# MOSAIC Topic Dashboard
+A web application for topic modelling of phenomenological reports using BERTopic and transformer embeddings.
 
-A Streamlit app for BERTopic-based topic modelling with sentence-transformers embeddings.
-**No data bundled** — upload CSV with one text column (any of: `reflection_answer_english`, `reflection_answer`, `text`, `report`).
+**Web app:** [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)
 
-## Lite Version (Free Hardware)
+## Statement of Need
 
-This Hugging Face Space runs the **`lite` version** of the app.
+Consciousness research increasingly relies on open-ended subjective reports to capture the richness of lived experience. Structured questionnaires like the Altered States of Consciousness scales or the MEQ impose predefined categories that can miss unexpected experiential dimensions.
 
-To make it run on free "CPU basic" hardware, the **LLM-based topic labeling feature has been disabled**. The app will use BERTopic's default keyword-based labels instead.
+MOSAICapp provides an alternative: instead of forcing reports into predefined categories, it uses neural topic modelling to discover thematic structure directly from the text. This "wide-angle" approach lets researchers see what participants actually describe before committing to a categorical framework.
 
-For the full, original version with LLM features (which requires paid GPU hardware), please see the `main` branch of the [original GitHub repository](https://github.com/romybeaute/MOSAICapp).
+The tool is designed for consciousness researchers, phenomenologists, and qualitative researchers working with text data who want computational analysis without writing code.
 
-## Run Locally (Full Version)
+## Features
 
-To run the full version on your local machine:
+- **No-code interface** — upload CSV, configure parameters, download results
+- **Sentence-level analysis** — optional segmentation for finer-grained themes
+- **Interactive visualisations** — 2D topic maps, hierarchical clustering, topic distributions
+- **LLM topic labelling** — automatic generation of interpretable labels (full version)
+- **Python API** — `mosaic_core` library for programmatic use and batch processing
+
+## Installation
+
+### Web app (no installation)
+
+Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)
+
+### Local installation
 
 ```bash
-# Clone the main branch
-git clone [https://github.com/romybeaute/MOSAICapp.git](https://github.com/romybeaute/MOSAICapp.git)
+git clone https://github.com/romybeaute/MOSAICapp.git
 cd MOSAICapp
-
-# Install requirements
 pip install -r requirements.txt
-
-# Download NLTK data
 python -c "import nltk; nltk.download('punkt')"
-
-# Run the app
 streamlit run app.py
+```
 
-# ---------------------------------------
-
-
-### Library Usage (Advanced)
-For researchers wishing to run MOSAIC programmatically (e.g., on a computer cluster), 
-you can import the core logic directly:
+### Library usage
 
 ```python
-from mosaic_core.analysis import preprocess_and_embed, run_topic_model
+from mosaic_core.core_functions import preprocess_and_embed, run_topic_model
 
-# 1. Load and Embed
-docs, embeddings = preprocess_and_embed("my_data.csv", text_col="report")
+docs, embeddings = preprocess_and_embed("data.csv", text_col="report")
 
-# 2. Configure
 config = {
     "umap_params": {"n_neighbors": 15, "n_components": 5},
     "hdbscan_params": {"min_cluster_size": 10},
     "bt_params": {"nr_topics": "auto"}
 }
 
-# 3. Run Analysis
-model, reduced_data, topics = run_topic_model(docs, embeddings, config)
+model, reduced_embeddings, topics = run_topic_model(docs, embeddings, config)
+```
+
+## Input format
+
+CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
+
+## How it works
+
+MOSAICapp implements a BERTopic pipeline: texts are embedded using sentence transformers, reduced with UMAP, clustered with HDBSCAN, and labelled using c-TF-IDF (with optional LLM refinement). This approach captures semantic context better than older bag-of-words methods like LDA.
+
+For methodological details, see the [MOSAIC paper](https://arxiv.org/abs/2502.18318).
+
+## Research applications
+
+MOSAICapp has been used to analyse:
+
+- Stroboscopic light experiences from the Dreamachine project
+- Descriptions of "pure awareness" from the Minimal Phenomenal Experience study  
+- Psychedelic experience reports (DMT, 5-MeO-DMT micro-phenomenological interviews)
+
+## Citation
+
+```bibtex
+@article{beaute2025mosaic,
+  title={Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC): 
+         Topic Modelling and LLM Applied to Stroboscopic Phenomenology},
+  author={Beauté, Romy and Schwartzman, David J and Dumas, Guillaume and 
+          Crook, Jennifer and Macpherson, Fiona and Barrett, Adam B and Seth, Anil K},
+  journal={arXiv preprint arXiv:2502.18318},
+  year={2025}
+}
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggesting features, and contributing code.
+
+## Tests
+
+```bash
+pytest tests/test_core_functions.py -v
+```
+
+## License
+
+MIT
+
+## Acknowledgements
+
+Built with [BERTopic](https://github.com/MaartenGr/BERTopic) by Maarten Grootendorst. Funded by the Be.AI Leverhulme doctoral scholarship at the Sussex Centre for Consciousness Science.

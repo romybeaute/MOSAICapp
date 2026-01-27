@@ -43,6 +43,9 @@ Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces
 git clone https://github.com/romybeaute/MOSAICapp.git
 cd MOSAICapp
 
+# Create virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate
 
 # Install dependencies and the package
 pip install -r requirements.txt

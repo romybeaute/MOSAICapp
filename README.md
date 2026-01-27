@@ -9,6 +9,8 @@ pinned: false
 
 # MOSAICapp
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18394317.svg)](https://doi.org/10.5281/zenodo.18394317)
+
 A web application for topic modelling of phenomenological reports using BERTopic and transformer embeddings.
 
 **Web app:** [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)

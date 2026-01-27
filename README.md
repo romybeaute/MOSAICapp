@@ -1,3 +1,12 @@
+---
+title: MOSAICapp
+colorFrom: indigo
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
+
 # MOSAICapp
 
 A web application for topic modelling of phenomenological reports using BERTopic and transformer embeddings.

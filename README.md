@@ -44,7 +44,7 @@ git clone https://github.com/romybeaute/MOSAICapp.git
 cd MOSAICapp
 
 # Create virtual environment (recommended)
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies and the package
@@ -111,6 +111,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, suggest
 
 ## Tests
 
+**Run everything:**
+```bash
+pytest tests/ -v
+```
+
+**Run only fast tests:**
 ```bash
 pytest tests/test_core_functions.py -v
 ```

@@ -1,73 +1,62 @@
-"""Pytest fixtures for MOSAIC tests."""
+"""Pytest fixtures for MOSAIC tests using local dummy dataset."""
 
 import os
-import tempfile
-
-import numpy as np
-import pandas as pd
 import pytest
-
-
-@pytest.fixture
-def sample_texts():
-    """Short phenomenological reports for testing."""
-    return [
-        "I saw vivid geometric patterns and colors.",
-        "There was a feeling of floating outside my body.",
-        "Time seemed to slow down completely.",
-        "I experienced a deep sense of peace and calm.",
-        "The music created visual patterns in my mind.",
-    ]
-
+import pandas as pd
+import numpy as np
+from pathlib import Path
 
 @pytest.fixture
-def sample_dataframe(sample_texts):
-    """DataFrame with text column and metadata."""
-    return pd.DataFrame({
-        "id": range(1, len(sample_texts) + 1),
-        "text": sample_texts,
-        "condition": ["HS", "HS", "DL", "DL", "HS"],
-    })
-
-
-@pytest.fixture
-def sample_csv(sample_dataframe):
-    """Temporary CSV file with sample data."""
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-        sample_dataframe.to_csv(f, index=False)
-        path = f.name
-    yield path
-    if os.path.exists(path):
-        os.unlink(path)
-
+def sample_csv():
+    """Returns the path to the dummy_dataset.csv file located in the same directory."""
+    # Get the directory where this conftest.py file resides
+    current_dir = Path(__file__).parent
+    file_path = current_dir / "dummy_dataset.csv"
+    
+    if not file_path.exists():
+        pytest.fail(f"Test data file not found at: {file_path}")
+        
+    return str(file_path)
 
 @pytest.fixture
-def sample_embeddings():
-    """Random embeddings matching sample_texts length."""
+def sample_dataframe(sample_csv):
+    """Loads the CSV into a DataFrame and normalizes column names."""
+    df = pd.read_csv(sample_csv)
+    
+    # Normalize text column name for tests (handle 'report' vs 'text')
+    if 'text' not in df.columns:
+        if 'report' in df.columns:
+            df = df.rename(columns={'report': 'text'})
+        else:
+            # Fallback: assume first column is text if neither exists
+            df = df.rename(columns={df.columns[0]: 'text'})
+            
+    return df
+
+@pytest.fixture
+def sample_texts(sample_dataframe):
+    """Returns the list of text reports from the dataframe."""
+    return sample_dataframe['text'].tolist()
+
+@pytest.fixture
+def sample_embeddings(sample_texts):
+    """Generates random embeddings matching the exact length of the CSV data."""
     np.random.seed(42)
-    return np.random.randn(5, 384).astype(np.float32)
-
-
-@pytest.fixture
-def larger_corpus():
-    """30 documents for topic modeling tests (UMAP needs >15 samples)."""
-    base = [
-        "I saw a bright light.",
-        "The light was blinding and white.",
-        "I felt a presence nearby.",
-        "The presence was comforting.",
-        "Patterns emerged in the visual field.",
-        "Geometric patterns were everywhere.",
-    ]
-    return base * 5
-
+    # Generate (n_samples, 384) matrix
+    return np.random.randn(len(sample_texts), 384).astype(np.float32)
 
 @pytest.fixture
-def larger_embeddings(larger_corpus):
-    """Embeddings for the larger corpus."""
-    np.random.seed(42)
-    return np.random.randn(len(larger_corpus), 384).astype(np.float32)
+def larger_corpus(sample_texts):
+    """
+    Alias for sample_texts. 
+    Since the dummy dataset is sufficiently large, we reuse it.
+    """
+    return sample_texts
 
+@pytest.fixture
+def larger_embeddings(sample_embeddings):
+    """Alias for sample_embeddings matching the larger corpus."""
+    return sample_embeddings
 
 @pytest.fixture
 def topic_config():

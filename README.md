@@ -43,9 +43,10 @@ Visit [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces
 git clone [https://github.com/romybeaute/MOSAICapp.git](https://github.com/romybeaute/MOSAICapp.git)
 cd MOSAICapp
 
-# Install dependencies and the package in editable mode
+
+# Install dependencies and the package
 pip install -r requirements.txt
-pip install -e .
+pip install .
 
 # Download NLTK data (required for segmentation)
 python -c "import nltk; nltk.download('punkt')"

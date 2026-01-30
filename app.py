@@ -395,27 +395,58 @@ def _hf_status_code(e: Exception) -> int | None:
     resp = getattr(e, "response", None)
     return getattr(resp, "status_code", None)
 
-SYSTEM_PROMPT = """You are an expert phenomenologist analysing first-person experiential reports or microphenomenological interviews.
+# SYSTEM_PROMPT = """You are an expert phenomenologist analysing first-person experiential reports or microphenomenological interviews.
 
-Your task is to assign a concise label to a cluster of similar reports by identifying the
-shared lived experiential structure or process they describe.
+# Your task is to assign a concise label to a cluster of similar reports by identifying the
+# shared lived experiential structure or process they describe.
+
+# The label must:
+# 1. Describe what changes in experience itself (e.g. boundaries, temporality, embodiment, agency, affect, meaning).
+# 2. Capture the underlying experiential process or structural transformation, not surface narrative details.
+# 3. Be specific and distinctive, but at the level of experiential structure rather than anecdotal content.
+# 4. Use phenomenological language that describes how cognitive, affective, or perceptual processes are lived, rather than analytic or evaluative abstractions.
+# 5. Be conceptually focused on a single dominant experiential pattern.
+# 6. Be concise and noun-phrase-like.
+
+# Constraints:
+# - Output ONLY the label (no explanation).
+# - 3–8 words.
+# - Avoid surface-specific details unless they reflect a recurring experiential structure.
+# - Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, evaluation) unless they directly describe how the process is experienced.
+# - Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
+# - No punctuation, no quotes, no extra text.
+# - Do not explain your reasoning.
+# """
+
+
+SYSTEM_PROMPT = """You are analysing first-person experiential reports from participants describing their subjective experiences.
+
+Your task is to create a clear, meaningful label for a cluster of similar reports.
 
 The label must:
-1. Describe what changes in experience itself (e.g. boundaries, temporality, embodiment, agency, affect, meaning).
-2. Capture the underlying experiential process or structural transformation, not surface narrative details.
-3. Be specific and distinctive, but at the level of experiential structure rather than anecdotal content.
-4. Use phenomenological language that describes how cognitive, affective, or perceptual processes are lived, rather than analytic or evaluative abstractions.
-5. Be conceptually focused on a single dominant experiential pattern.
-6. Be concise and noun-phrase-like.
+1. Describe WHAT participants actually experienced in plain, concrete terms
+2. Be specific enough that someone could recognize this experience from the label alone
+3. Capture the CONTENT of the experience, not just its category
+4. Use everyday language that participants themselves might use
+5. Be 3-10 words long
+
+BAD examples (too vague/abstract):
+- "Temporal consciousness shifts"
+- "Embodied affective processing"
+
+GOOD examples (concrete and meaningful):
+- "Feeling of merging with surroundings"
+- "Losing track of time passing"
+- "Vivid childhood memories"
+- "Sense of body expanding or shrinking"
+- "Feeling deeply calm and peaceful"
 
 Constraints:
-- Output ONLY the label (no explanation).
-- 3–8 words.
-- Avoid surface-specific details unless they reflect a recurring experiential structure.
-- Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, evaluation) unless they directly describe how the process is experienced.
-- Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
-- No punctuation, no quotes, no extra text.
-- Do not explain your reasoning.
+- Output ONLY the label
+- 3-10 words
+- Use language a participant would understand
+- No jargon unless participants used it
+- No quotes, no punctuation, no explanation
 """
 
     
@@ -440,15 +471,25 @@ Constraints:
 # """
 
 
-USER_TEMPLATE = """Here is a cluster of participant reports describing a specific phenomenon:
+# USER_TEMPLATE = """Here is a cluster of participant reports describing a specific phenomenon:
+
+# {documents}
+
+# Top keywords associated with this cluster:
+# {keywords}
+
+# Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
+# """
+
+USER_TEMPLATE = """Below are {n_docs} participant reports that were clustered together because they describe similar experiences:
 
 {documents}
 
-Top keywords associated with this cluster:
-{keywords}
+Keywords statistically associated with this cluster: {keywords}
 
-Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
-"""
+Based on WHAT these participants actually describe experiencing, write a single clear label (4-10 words) that captures the shared experience. Focus on the concrete content, not abstract categories.
+
+Output ONLY the label:"""
 
 def _clean_label(x: str) -> str:
     x = (x or "").strip()
@@ -486,7 +527,7 @@ def generate_labels_via_chat_completion(
     model_id: str = "meta-llama/Meta-Llama-3-8B-Instruct",
     max_topics: int = 50,
     max_docs_per_topic: int = 10,
-    doc_char_limit: int = 400,
+    doc_char_limit: int = 500,
     temperature: float = 0.2, #deterministic, stable outputs.
     force: bool = False) -> dict[int, str]:
     """
@@ -562,7 +603,7 @@ def generate_labels_via_chat_completion(
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=24, #Upper bound on how many tokens the model is allowed to generate as output for that label
+                max_tokens=35, #Upper bound on how many tokens the model is allowed to generate as output for that label
                 temperature=temperature,
                 stop=["\n"],
             )

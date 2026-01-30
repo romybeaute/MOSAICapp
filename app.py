@@ -481,7 +481,7 @@ Constraints:
 # Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
 # """
 
-USER_TEMPLATE = """Below are {n_docs} participant reports that were clustered together because they describe similar experiences:
+USER_TEMPLATE = """Below are participant reports that were clustered together because they describe similar experiences:
 
 {documents}
 

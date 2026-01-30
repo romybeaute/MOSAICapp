@@ -1267,88 +1267,88 @@ else:
     use_vectorizer = st.sidebar.checkbox("Use CountVectorizer", value=True,help="Enables bag-of-words representation for topic keyword extraction. Disable if you only want embedding-based clustering without keyword analysis.")
 
     with st.sidebar.expander("Vectorizer"):
-    ng_min = st.slider(
-        "Min N-gram", 1, 5, 1,
-        help="Minimum word sequence length. 1 = single words ('visual'), 2 = pairs ('visual experience'). Lower values capture basic terms."
-    )
-    ng_max = st.slider(
-        "Max N-gram", 1, 5, 2,
-        help="Maximum word sequence length. Higher values capture longer phrases but increase noise. 2-3 is usually optimal."
-    )
-    min_df = st.slider(
-        "Min Doc Freq", 1, 50, 1,
-        help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
-    )
-    stopwords = st.select_slider(
-        "Stopwords", 
-        options=[None, "english"], 
-        value=None,
-        help="Remove common English words (the, is, at, etc.)"
-    )
+        ng_min = st.slider(
+            "Min N-gram", 1, 5, 1,
+            help="Minimum word sequence length. 1 = single words ('visual'), 2 = pairs ('visual experience'). Lower values capture basic terms."
+        )
+        ng_max = st.slider(
+            "Max N-gram", 1, 5, 2,
+            help="Maximum word sequence length. Higher values capture longer phrases but increase noise. 2-3 is usually optimal."
+        )
+        min_df = st.slider(
+            "Min Doc Freq", 1, 50, 1,
+            help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
+        )
+        stopwords = st.select_slider(
+            "Stopwords", 
+            options=[None, "english"], 
+            value=None,
+            help="Remove common English words (the, is, at, etc.)"
+        )
 
     with st.sidebar.expander("UMAP"):
-    st.caption("UMAP reduces high-dimensional embeddings to a lower-dimensional space for clustering.")
-    um_n = st.slider(
-        "n_neighbors", 2, 50, 15,
-        help="How many neighbors to consider for each point. LOW (5-10): DEPENDS ON THE SIZE OF THE DATA, but: preserves fine local structure, more small clusters. HIGH (30-50): captures broader patterns, fewer larger clusters. This is often the most impactful parameter."
-    )
-    um_c = st.slider(
-        "n_components", 2, 20, 5,
-        help="Number of dimensions in the reduced space. Higher preserves more information but increases computation. 5-10 is typical for clustering; 2 is used for visualisation."
-    )
-    um_d = st.slider(
-        "min_dist", 0.0, 1.0, 0.0,
-        help="Minimum distance between points in reduced space. 0.0: points can clump tightly (better for clustering). Higher values spread points out (better for visualisation but worse for clustering)."
-    )
-
+        st.caption("UMAP reduces high-dimensional embeddings to a lower-dimensional space for clustering.")
+        um_n = st.slider(
+            "n_neighbors", 2, 50, 15,
+            help="How many neighbors to consider for each point. LOW (5-10): DEPENDS ON THE SIZE OF THE DATA, but: preserves fine local structure, more small clusters. HIGH (30-50): captures broader patterns, fewer larger clusters. This is often the most impactful parameter."
+        )
+        um_c = st.slider(
+            "n_components", 2, 20, 5,
+            help="Number of dimensions in the reduced space. Higher preserves more information but increases computation. 5-10 is typical for clustering; 2 is used for visualisation."
+        )
+        um_d = st.slider(
+            "min_dist", 0.0, 1.0, 0.0,
+            help="Minimum distance between points in reduced space. 0.0: points can clump tightly (better for clustering). Higher values spread points out (better for visualisation but worse for clustering)."
+        )
+    
     with st.sidebar.expander("HDBSCAN"):
-    st.caption("HDBSCAN finds clusters of varying densities and identifies outliers.")
-    hs = st.slider(
-        "min_cluster_size", 5, 100, 10,
-        help="Minimum points required to form a cluster. LOW (5-15): finds more, smaller clusters including niche topics (but can lead to overfitting). HIGH (30-100): only finds major themes, more outliers."
-    )
-    hm = st.slider(
-        "min_samples", 2, 100, 5,
-        help="How conservative clustering is. LOW (2-5): more inclusive, fewer outliers, but may merge distinct topics. HIGH (15+): stricter, more outliers, but clusters are more coherent. Should typically be ≤ min_cluster_size."
-    )
+        st.caption("HDBSCAN finds clusters of varying densities and identifies outliers.")
+        hs = st.slider(
+            "min_cluster_size", 5, 100, 10,
+            help="Minimum points required to form a cluster. LOW (5-15): finds more, smaller clusters including niche topics (but can lead to overfitting). HIGH (30-100): only finds major themes, more outliers."
+        )
+        hm = st.slider(
+            "min_samples", 2, 100, 5,
+            help="How conservative clustering is. LOW (2-5): more inclusive, fewer outliers, but may merge distinct topics. HIGH (15+): stricter, more outliers, but clusters are more coherent. Should typically be ≤ min_cluster_size."
+        )
 
     with st.sidebar.expander("BERTopic"):
-    nr_topics = st.text_input(
-        "nr_topics", 
-        value="auto",
-        help="Target number of topics. 'auto': let the algorithm decide. A number (e.g., '20'): merge similar topics down to this count. Use 'auto' first, then reduce if you have too many topics."
-    )
-    top_n_words = st.slider(
-        "top_n_words", 5, 25, 10,
-        help="Number of keywords per topic. More words give richer topic descriptions but may include less relevant terms. 10-15 is usually a good balance for interpretability."
-    )
-    
-    current_config = {
-        "embedding_model": selected_embedding_model,
-        "granularity": granularity_label,
-        "min_words": int(min_words or 0),
-        "subsample_percent": subsample_perc,
-        "use_vectorizer": use_vectorizer,
-        "vectorizer_params": {
-            "ngram_range": (ng_min, ng_max),
-            "min_df": min_df,
-            "stop_words": stopwords,
-        },
-        "umap_params": {
-            "n_neighbors": um_n,
-            "n_components": um_c,
-            "min_dist": um_d,
-        },
-        "hdbscan_params": {
-            "min_cluster_size": hs,
-            "min_samples": hm,
-        },
-        "bt_params": {
-            "nr_topics": nr_topics,
-            "top_n_words": top_n_words,
-        },
-        "text_column": selected_text_column,
-    }
+        nr_topics = st.text_input(
+            "nr_topics", 
+            value="auto",
+            help="Target number of topics. 'auto': let the algorithm decide. A number (e.g., '20'): merge similar topics down to this count. Use 'auto' first, then reduce if you have too many topics."
+        )
+        top_n_words = st.slider(
+            "top_n_words", 5, 25, 10,
+            help="Number of keywords per topic. More words give richer topic descriptions but may include less relevant terms. 10-15 is usually a good balance for interpretability."
+        )
+        
+        current_config = {
+            "embedding_model": selected_embedding_model,
+            "granularity": granularity_label,
+            "min_words": int(min_words or 0),
+            "subsample_percent": subsample_perc,
+            "use_vectorizer": use_vectorizer,
+            "vectorizer_params": {
+                "ngram_range": (ng_min, ng_max),
+                "min_df": min_df,
+                "stop_words": stopwords,
+            },
+            "umap_params": {
+                "n_neighbors": um_n,
+                "n_components": um_c,
+                "min_dist": um_d,
+            },
+            "hdbscan_params": {
+                "min_cluster_size": hs,
+                "min_samples": hm,
+            },
+            "bt_params": {
+                "nr_topics": nr_topics,
+                "top_n_words": top_n_words,
+            },
+            "text_column": selected_text_column,
+        }
 
     run_button = st.sidebar.button("Run Analysis", type="primary")
 

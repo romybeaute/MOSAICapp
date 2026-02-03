@@ -1282,7 +1282,8 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col,mi
 DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
     CSV_PATH, selected_embedding_model, selected_granularity, selected_text_column, min_words
 )
-
+METADATA_FILE = DOCS_FILE.replace(".npy", "_metadata.csv").replace("_docs.csv", "_metadata.csv")
+    
 # --- Cache management ---
 st.sidebar.markdown("### Cache")
 if st.sidebar.button(
@@ -1946,6 +1947,20 @@ else:
                 
                 # Reorder columns for clarity
                 long_format_df = long_format_df[["Topic", "Topic Name", "Document"]]
+
+                # === NEW: Merge Metadata if available ===
+                if os.path.exists(METADATA_FILE):
+                    try:
+                        meta_df = pd.read_csv(METADATA_FILE)
+                        # Only merge if the lengths match exactly (safety check)
+                        if len(meta_df) == len(long_format_df):
+                            long_format_df = pd.concat([
+                                long_format_df.reset_index(drop=True), 
+                                meta_df.reset_index(drop=True)
+                            ], axis=1)
+                    except Exception:
+                        pass # If it fails, we just download the data without metadata
+                # ========================================
                 
                 # Define filename
                 long_csv_name = f"all_sentences_{base}_{gran}.csv"

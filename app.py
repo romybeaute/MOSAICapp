@@ -12,7 +12,6 @@ Last Modified: 23/12/2025
 
 from pathlib import Path
 import sys
-# from llama_cpp import Llama  # <-- REMOVED
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -753,6 +752,146 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
 # =====================================================================
 
 
+# def generate_and_save_embeddings(
+#     csv_path,
+#     docs_file,
+#     emb_file,
+#     selected_embedding_model,
+#     split_sentences,
+#     device,
+#     text_col=None,
+#     min_words: int = 0, #for removal of sentences with <N words
+# ):
+
+#     # ---------------------
+#     # Load & clean CSV
+#     # ---------------------
+#     st.info(f"Reading and preparing CSV: {csv_path}")
+#     df = pd.read_csv(csv_path)
+
+#     if text_col is not None and text_col in df.columns:
+#         col = text_col
+#     else:
+#         col = _pick_text_column(df)
+
+#     if col is None:
+#         st.error("CSV must contain at least one text column.")
+#         return
+
+#     if col != "reflection_answer_english":
+#         df = df.rename(columns={col: "reflection_answer_english"})
+
+#     df.dropna(subset=["reflection_answer_english"], inplace=True)
+#     df["reflection_answer_english"] = df["reflection_answer_english"].astype(str)
+#     df = df[df["reflection_answer_english"].str.strip() != ""]
+#     reports = df["reflection_answer_english"].tolist()
+
+#     #change to add data sanity check
+#     granularity_label = "sentences" if split_sentences else "reports"
+    
+#     #change to account for sentence removal when < N words
+#     if split_sentences:
+#         try:
+#             sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
+#         except LookupError as e:
+#             st.error(f"NLTK tokenizer data not found: {e}")
+#             st.stop()
+
+#         total_units_before = len(sentences)
+
+#         if min_words and min_words > 0:
+#             docs = [s for s in sentences if len(s.split()) >= min_words]
+#             removed_texts = [s for s in sentences if len(s.split()) < min_words]
+#         else:
+#             docs = sentences
+#             removed_texts = []
+#     else:
+#         total_units_before = len(reports)
+#         if min_words and min_words > 0:
+#             docs = [r for r in reports if len(str(r).split()) >= min_words]
+#             removed_texts = [r for r in reports if len(str(r).split()) < min_words]
+#         else:
+#             docs = reports
+#             removed_texts = []
+
+#     total_units_after = len(docs)
+#     removed_units = total_units_before - total_units_after
+
+#     # Store stats for later display in "Dataset summary"
+#     st.session_state["last_data_stats"] = {
+#         "granularity": granularity_label,
+#         "min_words": int(min_words or 0),
+#         "total_before": int(total_units_before),
+#         "total_after": int(total_units_after),
+#         "removed": int(removed_units),
+#     }
+#     # keep removed texts so the UI can show them
+#     st.session_state["last_removed_units"] = removed_texts
+
+#     if min_words and min_words > 0:
+        
+#         st.info(
+#             f"Preprocessing: started with {total_units_before} {granularity_label}, "
+#             f"removed {removed_units} shorter than {min_words} words; "
+#             f"{total_units_after} remaining."
+#         )
+#     else:
+#         st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
+
+#     np.save(docs_file, np.array(docs, dtype=object))
+#     st.success(f"Prepared {len(docs)} documents")
+
+#     # ---------------------
+#     # Embeddings
+#     # ---------------------
+#     st.info(
+#         f"Encoding {len(docs)} documents with {selected_embedding_model} on {device}"
+#     )
+
+#     model = load_embedding_model(selected_embedding_model)
+
+#     # encode_device = None
+#     # batch_size = 32
+#     # if device == "CPU":
+#     #     encode_device = "cpu"
+#     #     batch_size = 64
+
+#     encode_device = None
+#     batch_size = 32
+
+#     # If user selected CPU explicitly, skip all checks
+#     if device == "CPU":
+#         encode_device = "cpu"
+#         batch_size = 64
+#     else:
+#         # User selected GPU. We try CUDA -> MPS -> CPU
+#         import torch
+#         if torch.cuda.is_available():
+#             encode_device = "cuda"
+#             st.toast("Using NVIDIA GPU (CUDA)")
+#         elif torch.backends.mps.is_available():
+#             encode_device = "mps"
+#             st.toast("Using Apple GPU (MPS)")
+#         else:
+#             encode_device = "cpu"
+#             st.warning("No GPU found (neither CUDA nor MPS). Falling back to CPU.")
+
+#     embeddings = model.encode(
+#         docs,
+#         show_progress_bar=True,
+#         batch_size=batch_size,
+#         device=encode_device,
+#         convert_to_numpy=True,
+#     )
+#     embeddings = np.asarray(embeddings, dtype=np.float32)
+#     np.save(emb_file, embeddings)
+
+#     st.success("Embedding generation complete!")
+#     st.balloons()
+#     st.rerun()
+
+
+
 def generate_and_save_embeddings(
     csv_path,
     docs_file,
@@ -761,11 +900,11 @@ def generate_and_save_embeddings(
     split_sentences,
     device,
     text_col=None,
-    min_words: int = 0, #for removal of sentences with <N words
+    min_words: int = 0,
 ):
 
     # ---------------------
-    # Load & clean CSV
+    # 1. Load & Clean CSV
     # ---------------------
     st.info(f"Reading and preparing CSV: {csv_path}")
     df = pd.read_csv(csv_path)
@@ -779,106 +918,144 @@ def generate_and_save_embeddings(
         st.error("CSV must contain at least one text column.")
         return
 
+    # Standardize the text column name
     if col != "reflection_answer_english":
         df = df.rename(columns={col: "reflection_answer_english"})
 
+    # Clean empty rows
     df.dropna(subset=["reflection_answer_english"], inplace=True)
     df["reflection_answer_english"] = df["reflection_answer_english"].astype(str)
     df = df[df["reflection_answer_english"].str.strip() != ""]
-    reports = df["reflection_answer_english"].tolist()
 
-    #change to add data sanity check
+    # Identify metadata columns (everything except the text)
+    metadata_cols = [c for c in df.columns if c != "reflection_answer_english"]
+
+    # ---------------------
+    # 2. Process Text & Metadata
+    # ---------------------
+    final_docs = []
+    removed_texts = []
+    final_metadata_rows = []
+
     granularity_label = "sentences" if split_sentences else "reports"
-    
-    #change to account for sentence removal when < N words
+    total_units_before = 0
+
     if split_sentences:
-        try:
-            sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
-        except LookupError as e:
-            st.error(f"NLTK tokenizer data not found: {e}")
-            st.stop()
+        # Loop through every report
+        for idx, row in df.iterrows():
+            report_text = row["reflection_answer_english"]
+            
+            # Tokenize
+            try:
+                sentences = nltk.sent_tokenize(report_text)
+            except LookupError:
+                nltk.download('punkt')
+                sentences = nltk.sent_tokenize(report_text)
+            
+            total_units_before += len(sentences)
+            
+            # Check every sentence
+            for sent in sentences:
+                # Filter by word count
+                if min_words > 0 and len(sent.split()) < min_words:
+                    removed_texts.append(sent)
+                    continue
+                
+                # Keep valid sentence
+                final_docs.append(sent)
+                
+                # Copy metadata for this sentence
+                meta = {c: row[c] for c in metadata_cols}
+                meta["_source_row_idx"] = idx  # Useful to trace back to original row
+                final_metadata_rows.append(meta)
 
-        total_units_before = len(sentences)
-
-        if min_words and min_words > 0:
-            docs = [s for s in sentences if len(s.split()) >= min_words]
-            removed_texts = [s for s in sentences if len(s.split()) < min_words]
-        else:
-            docs = sentences
-            removed_texts = []
     else:
-        total_units_before = len(reports)
-        if min_words and min_words > 0:
-            docs = [r for r in reports if len(str(r).split()) >= min_words]
-            removed_texts = [r for r in reports if len(str(r).split()) < min_words]
-        else:
-            docs = reports
-            removed_texts = []
+        # Report level processing
+        total_units_before = len(df)
+        
+        for idx, row in df.iterrows():
+            report_text = row["reflection_answer_english"]
+            
+            # Filter by word count
+            if min_words > 0 and len(report_text.split()) < min_words:
+                removed_texts.append(report_text)
+                continue
+                
+            # Keep valid report
+            final_docs.append(report_text)
+            
+            # Copy metadata
+            meta = {c: row[c] for c in metadata_cols}
+            meta["_source_row_idx"] = idx
+            final_metadata_rows.append(meta)
 
-    total_units_after = len(docs)
-    removed_units = total_units_before - total_units_after
+    # ---------------------
+    # 3. Update Session State (Crucial for Dashboard UI)
+    # ---------------------
+    total_units_after = len(final_docs)
+    removed_count = len(removed_texts)
 
-    # Store stats for later display in "Dataset summary"
     st.session_state["last_data_stats"] = {
         "granularity": granularity_label,
         "min_words": int(min_words or 0),
         "total_before": int(total_units_before),
         "total_after": int(total_units_after),
-        "removed": int(removed_units),
+        "removed": int(removed_count),
     }
-    # keep removed texts so the UI can show them
     st.session_state["last_removed_units"] = removed_texts
 
     if min_words and min_words > 0:
-        
         st.info(
             f"Preprocessing: started with {total_units_before} {granularity_label}, "
-            f"removed {removed_units} shorter than {min_words} words; "
+            f"removed {removed_count} shorter than {min_words} words; "
             f"{total_units_after} remaining."
         )
     else:
         st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
 
-    np.save(docs_file, np.array(docs, dtype=object))
-    st.success(f"Prepared {len(docs)} documents")
+    # ---------------------
+    # 4. Save Files
+    # ---------------------
+    # A. Save Documents (NPY)
+    np.save(docs_file, np.array(final_docs, dtype=object))
+    
+    # B. Save Metadata (CSV) - Derived filename
+    # We replace the .npy extension with _metadata.csv to keep it simpler
+    metadata_file = docs_file.replace(".npy", "_metadata.csv")
+    
+    # If the file didn't end in .npy, just append
+    if metadata_file == docs_file: 
+        metadata_file = docs_file + "_metadata.csv"
+
+    pd.DataFrame(final_metadata_rows).to_csv(metadata_file, index=False)
+    st.success(f"Saved documents and metadata ({metadata_file})")
 
     # ---------------------
-    # Embeddings
+    # 5. Generate Embeddings
     # ---------------------
     st.info(
-        f"Encoding {len(docs)} documents with {selected_embedding_model} on {device}"
+        f"Encoding {len(final_docs)} documents with {selected_embedding_model} on {device}"
     )
 
     model = load_embedding_model(selected_embedding_model)
 
-    # encode_device = None
-    # batch_size = 32
-    # if device == "CPU":
-    #     encode_device = "cpu"
-    #     batch_size = 64
-
+    # Device setup
     encode_device = None
     batch_size = 32
-
-    # If user selected CPU explicitly, skip all checks
     if device == "CPU":
         encode_device = "cpu"
         batch_size = 64
     else:
-        # User selected GPU. We try CUDA -> MPS -> CPU
         import torch
         if torch.cuda.is_available():
             encode_device = "cuda"
-            st.toast("Using NVIDIA GPU (CUDA)")
         elif torch.backends.mps.is_available():
             encode_device = "mps"
-            st.toast("Using Apple GPU (MPS)")
         else:
             encode_device = "cpu"
-            st.warning("No GPU found (neither CUDA nor MPS). Falling back to CPU.")
 
     embeddings = model.encode(
-        docs,
+        final_docs,
         show_progress_bar=True,
         batch_size=batch_size,
         device=encode_device,
@@ -890,7 +1067,6 @@ def generate_and_save_embeddings(
     st.success("Embedding generation complete!")
     st.balloons()
     st.rerun()
-
 
 # =====================================================================
 # 7. Sidebar — dataset, upload, parameters

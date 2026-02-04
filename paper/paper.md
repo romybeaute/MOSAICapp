@@ -11,7 +11,10 @@ authors:
   - name: Romy Beauté
     orcid: 0009-0006-4548-5349
     corresponding: true
-    affiliation: "1, 2"
+    affiliation: "1, 2, 3"
+  - name: Guillaume Dumas
+    orcid: 0000-0002-2253-1844
+    affiliation: "4, 5, 6, 7"
 affiliations:
   - name: Sussex Centre for Consciousness Science, University of Sussex, UK
     index: 1
@@ -19,6 +22,14 @@ affiliations:
     index: 2
   - name: UCL Centre for Consciousness Research, University College London, UK
     index: 3
+  - name: CHU Sainte-Justine Azrieli Research Center, Montréal, Québec, Canada
+    index: 4
+  - name: Department of Psychiatry and Addictology, University of Montréal, Montréal, Québec, Canada
+    index: 5
+  - name: Mila – Quebec Artificial Intelligence Institute, Montréal, Québec, Canada
+    index: 6
+  - name: Program for Brain, Mind, and Consciousness, Canadian Institute for Advanced Research, Toronto, Ontario, Canada
+    index: 7
 date: 27 January 2026
 bibliography: paper.bib
 ---

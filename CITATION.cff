@@ -12,6 +12,10 @@ authors:
     given-names: "Romy"
     orcid: "https://orcid.org/0009-0006-4548-5349"
     affiliation: "Sussex Centre for Consciousness Science, University of Sussex, UK"
+  - family-names: "Dumas"
+    given-names: "Guillaume"
+    orcid: "https://orcid.org/0000-0002-2253-1844"
+    affiliation: "University of Montréal, Montréal, Québec, Canada"
 keywords:
   - topic modelling
   - phenomenology

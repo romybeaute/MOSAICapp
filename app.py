@@ -630,7 +630,7 @@ def generate_labels_via_chat_completion(
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=35, #Upper bound on how many tokens the model is allowed to generate as output for that label
+                max_tokens=60, #Upper bound on how many tokens the model is allowed to generate as output for that label
                 temperature=temperature,
                 stop=["\n"],
             )
@@ -2013,11 +2013,83 @@ else:
             # # Update the dataframe visual to show which are valid
             # st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
 
+            # st.subheader("Topic Participation Analysis")
+            
+            # # Check if we have the stats in session state
+            # if "diversity_stats" in st.session_state:
+            #     # FIX: Load into a variable named 'diversity_stats' to match the filtering logic
+            #     diversity_stats = st.session_state.diversity_stats
+                
+            #     # Metric Description
+            #     st.caption("""
+            #     **Diversity Ratio:** - **Close to 1.0 (100%):** High consensus. The topic is built from sentences spoken by many different people.
+            #     - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
+            #     """)
+
+            #     st.dataframe(
+            #         diversity_stats[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
+            #         .sort_values("Unique_Reports", ascending=False)
+            #         .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
+            #         use_container_width=True
+            #     )
+
+            #     chart = alt.Chart(diversity_stats).mark_circle(size=100).encode(
+            #         x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
+            #         y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
+            #         color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
+            #         tooltip=['Name', 'Total_Sentences', 'Unique_Reports', 'Diversity_Ratio']
+            #     ).properties(
+            #         title="Are topics driven by group consensus or individual monologues?",
+            #         height=400
+            #     ).interactive()
+
+            #     line = alt.Chart(pd.DataFrame({'x': [0, diversity_stats['Total_Sentences'].max()], 'y': [0, diversity_stats['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
+
+            #     st.altair_chart(chart + line, use_container_width=True)
+            #     st.info("""
+            #     **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
+                
+            #     This graph distinguishes between widespread shared experiences (robust structures) and highly detailed personal accounts (idiosyncratic discoveries).
+
+            #     - **The Diagonal Line (100% Diversity):** *Phenomenological Robustness.* Every sentence comes from a different participant. This indicates a structural invariant shared across the cohort.
+            #     - **The Vertical Drop:** *Idiosyncratic Discovery.* The further a dot drops below the line, the more the topic is defined by a specific individual's detailed account.
+            #         - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
+            #         - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
+            #     """)
+
+            #     # --- NEW FILTERING SECTION (Indented correctly inside the if block) ---
+            #     st.subheader("Topic Filtering")
+            #     min_participants = st.slider(
+            #         "Hide topics with fewer than N unique reports/participants",
+            #         min_value=1, 
+            #         max_value=20, 
+            #         value=1,
+            #         help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
+            #     )
+
+            #     # Identify "bad" topics
+            #     idiosyncratic_topics = diversity_stats[
+            #         diversity_stats["Unique_Reports"] < min_participants
+            #     ]["Topic"].tolist()
+
+            #     # Update the labels map for display
+            #     # We update the 'filtered_llm_names' variable which is used in the Export section later
+            #     filtered_llm_names = llm_names.copy()
+            #     for t in idiosyncratic_topics:
+            #         filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
+
+            #     # Update the dataframe visual to show which are valid
+            #     st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
+            
+            # else:
+            #     # Fallback if diversity_stats failed to calculate (e.g. metadata missing)
+            #     st.caption("Topic participation stats unavailable (Metadata missing or run not finished).")
+            #     filtered_llm_names = llm_names.copy() # Just use original names
+
             st.subheader("Topic Participation Analysis")
             
-            # Check if we have the stats in session state
             if "diversity_stats" in st.session_state:
-                # FIX: Load into a variable named 'diversity_stats' to match the filtering logic
+                # FIX: Rename 'div_df' to 'diversity_stats' so the filtering code below can find it
                 diversity_stats = st.session_state.diversity_stats
                 
                 # Metric Description
@@ -2026,6 +2098,7 @@ else:
                 - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
                 """)
 
+                # 1. The Table
                 st.dataframe(
                     diversity_stats[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
                     .sort_values("Unique_Reports", ascending=False)
@@ -2033,6 +2106,7 @@ else:
                     use_container_width=True
                 )
 
+                # 2. The Visualization
                 chart = alt.Chart(diversity_stats).mark_circle(size=100).encode(
                     x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
                     y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
@@ -2046,6 +2120,8 @@ else:
                 line = alt.Chart(pd.DataFrame({'x': [0, diversity_stats['Total_Sentences'].max()], 'y': [0, diversity_stats['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
 
                 st.altair_chart(chart + line, use_container_width=True)
+                
+                # --- RESTORED: Your explanatory text ---
                 st.info("""
                 **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
                 
@@ -2056,8 +2132,9 @@ else:
                     - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
                     - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
                 """)
+                # ---------------------------------------
 
-                # --- NEW FILTERING SECTION (Indented correctly inside the if block) ---
+                # --- NEW: Topic Filtering (NameError Fixed) ---
                 st.subheader("Topic Filtering")
                 min_participants = st.slider(
                     "Hide topics with fewer than N unique reports/participants",
@@ -2067,26 +2144,22 @@ else:
                     help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
                 )
 
-                # Identify "bad" topics
+                # Identify "bad" topics using the correctly named variable
                 idiosyncratic_topics = diversity_stats[
                     diversity_stats["Unique_Reports"] < min_participants
                 ]["Topic"].tolist()
 
                 # Update the labels map for display
-                # We update the 'filtered_llm_names' variable which is used in the Export section later
                 filtered_llm_names = llm_names.copy()
                 for t in idiosyncratic_topics:
                     filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
 
-                # Update the dataframe visual to show which are valid
+                # Update the visual feedback
                 st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
             
             else:
-                # Fallback if diversity_stats failed to calculate (e.g. metadata missing)
                 st.caption("Topic participation stats unavailable (Metadata missing or run not finished).")
-                filtered_llm_names = llm_names.copy() # Just use original names
-
-            
+                filtered_llm_names = llm_names.copy()
 
 
             st.subheader("Export results (one row per topic)")

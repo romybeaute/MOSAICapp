@@ -3,6 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,9 @@ from mosaic_core.core_functions import (
     get_topic_labels,
     get_outlier_stats,
     get_num_topics,
+    ensure_nltk_data,
+    get_hf_status_code,
+    generate_llm_labels,
 )
 
 
@@ -323,18 +327,18 @@ class TestCleanupOldCache:
     
     def test_removes_non_matching_files(self):
         from mosaic_core.core_functions import cleanup_old_cache
-        
+
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create some fake cache files
-            (Path(tmpdir) / "precomputed_OLD_docs.npy").touch()
-            (Path(tmpdir) / "precomputed_OLD_emb.npy").touch()
-            (Path(tmpdir) / "precomputed_CURRENT_docs.npy").touch()
-            
+            # Create fake cache files (json docs + npy embeddings)
+            (Path(tmpdir) / "precomputed_OLD_docs.json").touch()
+            (Path(tmpdir) / "precomputed_OLD_embeddings.npy").touch()
+            (Path(tmpdir) / "precomputed_CURRENT_docs.json").touch()
+
             removed = cleanup_old_cache(tmpdir, "CURRENT")
-            
+
             assert removed == 2
-            assert (Path(tmpdir) / "precomputed_CURRENT_docs.npy").exists()
-            assert not (Path(tmpdir) / "precomputed_OLD_docs.npy").exists()
+            assert (Path(tmpdir) / "precomputed_CURRENT_docs.json").exists()
+            assert not (Path(tmpdir) / "precomputed_OLD_docs.json").exists()
     
     def test_handles_missing_dir(self):
         from mosaic_core.core_functions import cleanup_old_cache
@@ -355,6 +359,140 @@ class TestResolveDevice:
     
     def test_cpu_uppercase(self):
         from mosaic_core.core_functions import resolve_device
-        
+
         device, _ = resolve_device("CPU")
         assert device == "cpu"
+
+
+class TestEnsureNltkData:
+    """NLTK data download logic."""
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_returns_when_punkt_tab_found(self, mock_nltk):
+        mock_nltk.data.path = []
+        mock_nltk.data.find.return_value = True
+        ensure_nltk_data()
+        mock_nltk.download.assert_not_called()
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_downloads_when_both_missing(self, mock_nltk):
+        mock_nltk.data.path = []
+        mock_nltk.data.find.side_effect = LookupError("not found")
+        ensure_nltk_data()
+        mock_nltk.download.assert_called_once_with("punkt", download_dir=None, quiet=True)
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_data_dir_added_to_path(self, mock_nltk):
+        mock_nltk.data.path = []
+        mock_nltk.data.find.return_value = True
+        ensure_nltk_data(data_dir="/custom/path")
+        assert "/custom/path" in mock_nltk.data.path
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_data_dir_not_duplicated(self, mock_nltk):
+        mock_nltk.data.path = ["/custom/path"]
+        mock_nltk.data.find.return_value = True
+        ensure_nltk_data(data_dir="/custom/path")
+        assert mock_nltk.data.path.count("/custom/path") == 1
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_falls_back_to_punkt(self, mock_nltk):
+        """punkt_tab missing but punkt found — no download needed."""
+        mock_nltk.data.path = []
+        mock_nltk.data.find.side_effect = [LookupError, True]
+        ensure_nltk_data()
+        mock_nltk.download.assert_not_called()
+
+    @patch("mosaic_core.core_functions.nltk")
+    def test_download_failure_does_not_crash(self, mock_nltk):
+        mock_nltk.data.path = []
+        mock_nltk.data.find.side_effect = LookupError("not found")
+        mock_nltk.download.side_effect = OSError("network error")
+        ensure_nltk_data()  # should not raise
+
+
+class TestGetHfStatusCode:
+    """HTTP status code extraction from HuggingFace exceptions."""
+
+    def test_extracts_status_code(self):
+        exc = Exception("api error")
+        exc.response = MagicMock(status_code=402)
+        assert get_hf_status_code(exc) == 402
+
+    def test_returns_none_without_response(self):
+        exc = Exception("no response attr")
+        assert get_hf_status_code(exc) is None
+
+    def test_returns_none_with_none_response(self):
+        exc = Exception("null response")
+        exc.response = None
+        assert get_hf_status_code(exc) is None
+
+    def test_returns_none_without_status_code(self):
+        exc = Exception("response but no status")
+        exc.response = MagicMock(spec=[])
+        assert get_hf_status_code(exc) is None
+
+
+class TestGenerateLlmLabels:
+    """LLM label generation with mocked HuggingFace API."""
+
+    @staticmethod
+    def _make_mock_topic_model(topic_ids):
+        model = MagicMock()
+        info_data = {
+            "Topic": [-1] + topic_ids,
+            "Count": [5] * (1 + len(topic_ids)),
+        }
+        model.get_topic_info.return_value = pd.DataFrame(info_data)
+        model.get_topic.return_value = [("word1", 0.5), ("word2", 0.3)]
+        model.get_representative_docs.return_value = ["Sample doc text."]
+        return model
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_success_returns_labels(self, MockClient):
+        mock_client = MockClient.return_value
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content="Embodied Awareness"))]
+        mock_client.chat_completion.return_value = completion
+
+        model = self._make_mock_topic_model([0, 1])
+        labels = generate_llm_labels(model, hf_token="fake-token", max_topics=2)
+
+        assert isinstance(labels, dict)
+        assert len(labels) == 2
+        assert all(isinstance(v, str) for v in labels.values())
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_402_raises_runtime_error(self, MockClient):
+        mock_client = MockClient.return_value
+        exc = Exception("payment required")
+        exc.response = MagicMock(status_code=402)
+        mock_client.chat_completion.side_effect = exc
+
+        model = self._make_mock_topic_model([0])
+        with pytest.raises(RuntimeError, match="402 Payment Required"):
+            generate_llm_labels(model, hf_token="fake-token")
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_generic_error_falls_back(self, MockClient):
+        mock_client = MockClient.return_value
+        mock_client.chat_completion.side_effect = Exception("server error")
+
+        model = self._make_mock_topic_model([0, 1])
+        labels = generate_llm_labels(model, hf_token="fake-token")
+
+        assert labels[0] == "Topic 0"
+        assert labels[1] == "Topic 1"
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_labels_cleaned(self, MockClient):
+        mock_client = MockClient.return_value
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content='"Experience of Light."'))]
+        mock_client.chat_completion.return_value = completion
+
+        model = self._make_mock_topic_model([0])
+        labels = generate_llm_labels(model, hf_token="fake-token")
+
+        assert labels[0] == "Light"

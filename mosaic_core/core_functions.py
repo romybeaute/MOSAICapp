@@ -101,13 +101,14 @@ def make_run_id(cfg):
 
 
 def cleanup_old_cache(cache_dir, current_slug):
-    """Delete cached .npy files that don't match current dataset slug."""
+    """Delete cached files that don't match current dataset slug."""
     cache_dir = Path(cache_dir)
     if not cache_dir.exists():
         return 0
-    
+
     removed = 0
-    for p in cache_dir.glob("precomputed_*.npy"):
+    cache_files = list(cache_dir.glob("precomputed_*.npy")) + list(cache_dir.glob("precomputed_*_docs.json"))
+    for p in cache_files:
         if current_slug not in p.name:
             try:
                 p.unlink()

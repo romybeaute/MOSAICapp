@@ -129,13 +129,13 @@ def _slugify(s: str) -> str:
     return s or "DATASET"
 
 def _cleanup_old_cache(current_slug: str):
-    """Deletes precomputed .npy files that do not match the current dataset slug."""
+    """Deletes precomputed cache files that do not match the current dataset slug."""
     if not CACHE_DIR.exists():
         return
-    
+
     removed_count = 0
-    # Iterate over all precomputed files
-    for p in CACHE_DIR.glob("precomputed_*.npy"):
+    cache_files = list(CACHE_DIR.glob("precomputed_*.npy")) + list(CACHE_DIR.glob("precomputed_*_docs.json"))
+    for p in cache_files:
         # If the file belongs to a different dataset (doesn't contain the new slug)
         if current_slug not in p.name:
             try:
@@ -357,8 +357,9 @@ def load_embedding_model(model_name):
 
 @st.cache_data
 def load_precomputed_data(docs_file, embeddings_file):
-    docs = np.load(docs_file, allow_pickle=True).tolist()
-    emb = np.load(embeddings_file, allow_pickle=True)
+    with open(docs_file, "r", encoding="utf-8") as f:
+        docs = json.load(f)
+    emb = np.load(embeddings_file)
     return docs, emb
 
 
@@ -798,7 +799,8 @@ def generate_and_save_embeddings(
     else:
         st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
 
-    np.save(docs_file, np.array(docs, dtype=object))
+    with open(docs_file, "w", encoding="utf-8") as f:
+        json.dump(docs, f, ensure_ascii=False)
     st.success(f"Prepared {len(docs)} documents")
 
     # ---------------------
@@ -1057,7 +1059,7 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col,mi
 
 
     return (
-    str(CACHE_DIR / f"precomputed_{base}{col_suffix}_{suf}{mw_suffix}_docs.npy"),
+    str(CACHE_DIR / f"precomputed_{base}{col_suffix}_{suf}{mw_suffix}_docs.json"),
     str(CACHE_DIR / f"precomputed_{base}_{safe_model}{col_suffix}_{suf}{mw_suffix}_embeddings.npy"),
     )
 

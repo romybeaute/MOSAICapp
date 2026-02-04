@@ -1919,6 +1919,16 @@ else:
                 line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
 
                 st.altair_chart(chart + line, use_container_width=True)
+                st.info("""
+                **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
+                
+                This graph distinguishes between widespread shared experiences (robust structures) and highly detailed personal accounts (idiosyncratic discoveries).
+
+                - **The Diagonal Line (100% Diversity):** *Phenomenological Robustness.* Every sentence comes from a different participant. This indicates a structural invariant shared across the cohort.
+                - **The Vertical Drop:** *Idiosyncratic Discovery.* The further a dot drops below the line, the more the topic is defined by a specific individual's detailed account.
+                    - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
+                    - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
+                """)
 
             st.subheader("Export results (one row per topic)")
 
@@ -2019,48 +2029,92 @@ else:
 
             with cR:
 
-                # Create a Long Format DataFrame (One row per sentence)
-                # This ensures NO text is hidden due to Excel cell limits
-                long_format_df = doc_info.copy()
-                long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
+                # # Create a Long Format DataFrame (One row per sentence)
+                # # This ensures NO text is hidden due to Excel cell limits
+                # long_format_df = doc_info.copy()
+                # long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
                 
-                # Reorder columns for clarity
-                long_format_df = long_format_df[["Topic", "Topic Name", "Document"]]
+                # # Reorder columns for clarity
+                # long_format_df = long_format_df[["Topic", "Topic Name", "Document"]]
 
-                # === NEW: Merge Metadata if available ===
-                if os.path.exists(METADATA_FILE):
-                    try:
-                        meta_df = pd.read_csv(METADATA_FILE)
-                        # Only merge if the lengths match exactly (safety check)
-                        if len(meta_df) == len(long_format_df):
-                            long_format_df = pd.concat([
-                                long_format_df.reset_index(drop=True), 
-                                meta_df.reset_index(drop=True)
-                            ], axis=1)
-                    except Exception:
-                        pass # If it fails, we just download the data without metadata
-                # ========================================
+                # # === NEW: Merge Metadata if available ===
+                # if os.path.exists(METADATA_FILE):
+                #     try:
+                #         meta_df = pd.read_csv(METADATA_FILE)
+                #         # Only merge if the lengths match exactly (safety check)
+                #         if len(meta_df) == len(long_format_df):
+                #             long_format_df = pd.concat([
+                #                 long_format_df.reset_index(drop=True), 
+                #                 meta_df.reset_index(drop=True)
+                #             ], axis=1)
+                #     except Exception:
+                #         pass # If it fails, we just download the data without metadata
+                # # ========================================
                 
-                # Define filename
-                long_csv_name = f"all_sentences_{base}_{gran}.csv"
-                
-                st.download_button(
-                    "Download All Sentences (Long Format)",
-                    data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
-                    file_name=long_csv_name,
-                    mime="text/csv",
-                    use_container_width=True,
-                    help="Download a CSV with one row per sentence. Best for checking exactly which sentences belong to which topic."
-                )
+                # # Define filename
+                # long_csv_name = f"all_sentences_{base}_{gran}.csv"
                 
                 # st.download_button(
-                #     "Download CSV",
-                #     data=export_csv.to_csv(index=False).encode("utf-8-sig"),
-                #     file_name=csv_name,
+                #     "Download All Sentences (Long Format)",
+                #     data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
+                #     file_name=long_csv_name,
                 #     mime="text/csv",
                 #     use_container_width=True,
+                #     help="Download a CSV with one row per sentence. Best for checking exactly which sentences belong to which topic."
                 # )
+                with cR:
+                    # Create a Long Format DataFrame (One row per sentence)
+                    long_format_df = doc_info.copy()
+                    
+                    # Add human-readable labels
+                    long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
 
+                    # === UPDATED: Merge Metadata & Rename IDs ===
+                    if os.path.exists(METADATA_FILE):
+                        try:
+                            meta_df = pd.read_csv(METADATA_FILE)
+                            
+                            # Only merge if lengths match (Safety check)
+                            if len(meta_df) == len(long_format_df):
+                                
+                                # 1. Rename the ID column to be very clear
+                                if "_source_row_idx" in meta_df.columns:
+                                    meta_df = meta_df.rename(columns={"_source_row_idx": "Report_ID"})
+                                    
+                                # 2. Rename the text column if it exists in metadata (to avoid confusion)
+                                if "reflection_answer_english" in meta_df.columns:
+                                    meta_df = meta_df.rename(columns={"reflection_answer_english": "Original_Full_Report"})
+
+                                # 3. Merge side-by-side
+                                long_format_df = pd.concat([
+                                    long_format_df.reset_index(drop=True), 
+                                    meta_df.reset_index(drop=True)
+                                ], axis=1)
+                                
+                        except Exception as e:
+                            st.warning(f"Could not merge metadata: {e}")
+                    # ========================================
+                    
+                    # Reorder columns: Put ID and Topic first
+                    cols = list(long_format_df.columns)
+                    # Try to move Report_ID to the front if it exists
+                    if "Report_ID" in cols:
+                        cols.insert(0, cols.pop(cols.index("Report_ID")))
+                    
+                    long_format_df = long_format_df[cols]
+
+                    # Define filename
+                    long_csv_name = f"all_sentences_{base}_{gran}.csv"
+                    
+                    st.download_button(
+                        "Download All Sentences (Long Format)",
+                        data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=long_csv_name,
+                        mime="text/csv",
+                        use_container_width=True,
+                        help="Includes Report_ID to trace sentences back to their author."
+                    )
+            st.subheader("Export preview")
             # st.caption("Preview (one row per topic)")
             st.dataframe(export_csv)
 

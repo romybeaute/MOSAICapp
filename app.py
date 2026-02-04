@@ -1462,6 +1462,26 @@ else:
 
     use_vectorizer = st.sidebar.checkbox("Use CountVectorizer", value=True,help="Enables bag-of-words representation for topic keyword extraction. Disable if you only want embedding-based clustering without keyword analysis.")
 
+    # with st.sidebar.expander("Vectorizer"):
+    #     ng_min = st.slider(
+    #         "Min N-gram", 1, 5, 1,
+    #         help="Minimum word sequence length. 1 = single words ('visual'), 2 = pairs ('visual experience'). Lower values capture basic terms."
+    #     )
+    #     ng_max = st.slider(
+    #         "Max N-gram", 1, 5, 2,
+    #         help="Maximum word sequence length. Higher values capture longer phrases but increase noise. 2-3 is usually optimal."
+    #     )
+    #     min_df = st.slider(
+    #         "Min Doc Freq", 1, 50, 1,
+    #         help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
+    #     )
+    #     stopwords = st.select_slider(
+    #         "Stopwords", 
+    #         options=[None, "english"], 
+    #         value=None,
+    #         help="Remove common English words (the, is, at, etc.)"
+    #     )
+
     with st.sidebar.expander("Vectorizer"):
         ng_min = st.slider(
             "Min N-gram", 1, 5, 1,
@@ -1475,12 +1495,17 @@ else:
             "Min Doc Freq", 1, 50, 1,
             help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
         )
-        stopwords = st.select_slider(
-            "Stopwords", 
-            options=[None, "english"], 
-            value=None,
-            help="Remove common English words (the, is, at, etc.)"
+        
+        # --- NEW STOPWORDS LOGIC ---
+        st.write("Stopwords Configuration")
+        use_english_stopwords = st.checkbox("Use standard English stopwords", value=True)
+        
+        custom_stopwords_input = st.text_area(
+            "Custom Stopwords (comma-separated)",
+            value="",
+            help="Add context-specific words here to force the model to ignore them."
         )
+        # ---------------------------
 
     with st.sidebar.expander("UMAP"):
         st.caption("UMAP reduces high-dimensional embeddings to a lower-dimensional space for clustering.")
@@ -1518,6 +1543,19 @@ else:
             "top_n_words", 5, 25, 10,
             help="Number of keywords per topic. More words give richer topic descriptions but may include less relevant terms. 10-15 is usually a good balance for interpretability."
         )
+
+
+        final_stopwords = []
+        if use_english_stopwords:
+            from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+            final_stopwords = list(ENGLISH_STOP_WORDS)
+        
+        if custom_stopwords_input:
+            custom_list = [w.strip().lower() for w in custom_stopwords_input.split(",") if w.strip()]
+            final_stopwords.extend(custom_list)
+            
+        # Pass None if list is empty (default behavior), otherwise pass the list
+        vectorizer_stopwords = final_stopwords if final_stopwords else None
         
         current_config = {
             "embedding_model": selected_embedding_model,
@@ -1528,7 +1566,7 @@ else:
             "vectorizer_params": {
                 "ngram_range": (ng_min, ng_max),
                 "min_df": min_df,
-                "stop_words": stopwords,
+                "stop_words": vectorizer_stopwords, 
             },
             "umap_params": {
                 "n_neighbors": um_n,
@@ -1909,10 +1947,78 @@ else:
             st.subheader("Topic Info")
             st.dataframe(tm.get_topic_info())
             
+            # st.subheader("Topic Participation Analysis")
+            
+            # if "diversity_stats" in st.session_state:
+            #     div_df = st.session_state.diversity_stats
+                
+            #     # Metric Description
+            #     st.caption("""
+            #     **Diversity Ratio:** - **Close to 1.0 (100%):** High consensus. The topic is built from sentences spoken by many different people.
+            #     - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
+            #     """)
+
+            #     st.dataframe(
+            #         div_df[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
+            #         .sort_values("Unique_Reports", ascending=False)
+            #         .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
+            #         use_container_width=True
+            #     )
+
+                
+
+            #     chart = alt.Chart(div_df).mark_circle(size=100).encode(
+            #         x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
+            #         y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
+            #         color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
+            #         tooltip=['Name', 'Total_Sentences', 'Unique_Reports', 'Diversity_Ratio']
+            #     ).properties(
+            #         title="Are topics driven by group consensus or individual monologues?",
+            #         height=400
+            #     ).interactive()
+
+            #     line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
+
+            #     st.altair_chart(chart + line, use_container_width=True)
+            #     st.info("""
+            #     **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
+                
+            #     This graph distinguishes between widespread shared experiences (robust structures) and highly detailed personal accounts (idiosyncratic discoveries).
+
+            #     - **The Diagonal Line (100% Diversity):** *Phenomenological Robustness.* Every sentence comes from a different participant. This indicates a structural invariant shared across the cohort.
+            #     - **The Vertical Drop:** *Idiosyncratic Discovery.* The further a dot drops below the line, the more the topic is defined by a specific individual's detailed account.
+            #         - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
+            #         - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
+            #     """)
+
+            # st.subheader("Topic Filtering")
+            # min_participants = st.slider(
+            #     "Hide topics with fewer than N unique reports/participants",
+            #     min_value=1, 
+            #     max_value=20, 
+            #     value=1,
+            #     help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
+            # )
+
+            # # Identify "bad" topics
+            # idiosyncratic_topics = diversity_stats[
+            #     diversity_stats["Unique_Reports"] < min_participants
+            # ]["Topic"].tolist()
+
+            # # Update the labels map for display
+            # filtered_llm_names = llm_names.copy()
+            # for t in idiosyncratic_topics:
+            #     filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
+
+            # # Update the dataframe visual to show which are valid
+            # st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
+
             st.subheader("Topic Participation Analysis")
             
+            # Check if we have the stats in session state
             if "diversity_stats" in st.session_state:
-                div_df = st.session_state.diversity_stats
+                # FIX: Load into a variable named 'diversity_stats' to match the filtering logic
+                diversity_stats = st.session_state.diversity_stats
                 
                 # Metric Description
                 st.caption("""
@@ -1921,15 +2027,13 @@ else:
                 """)
 
                 st.dataframe(
-                    div_df[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
+                    diversity_stats[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
                     .sort_values("Unique_Reports", ascending=False)
                     .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
                     use_container_width=True
                 )
 
-                
-
-                chart = alt.Chart(div_df).mark_circle(size=100).encode(
+                chart = alt.Chart(diversity_stats).mark_circle(size=100).encode(
                     x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
                     y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
                     color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
@@ -1939,7 +2043,7 @@ else:
                     height=400
                 ).interactive()
 
-                line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
+                line = alt.Chart(pd.DataFrame({'x': [0, diversity_stats['Total_Sentences'].max()], 'y': [0, diversity_stats['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
 
                 st.altair_chart(chart + line, use_container_width=True)
                 st.info("""
@@ -1953,27 +2057,34 @@ else:
                     - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
                 """)
 
-            st.subheader("Topic Filtering")
-            min_participants = st.slider(
-                "Hide topics with fewer than N unique reports/participants",
-                min_value=1, 
-                max_value=20, 
-                value=1,
-                help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
-            )
+                # --- NEW FILTERING SECTION (Indented correctly inside the if block) ---
+                st.subheader("Topic Filtering")
+                min_participants = st.slider(
+                    "Hide topics with fewer than N unique reports/participants",
+                    min_value=1, 
+                    max_value=20, 
+                    value=1,
+                    help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
+                )
 
-            # Identify "bad" topics
-            idiosyncratic_topics = diversity_stats[
-                diversity_stats["Unique_Reports"] < min_participants
-            ]["Topic"].tolist()
+                # Identify "bad" topics
+                idiosyncratic_topics = diversity_stats[
+                    diversity_stats["Unique_Reports"] < min_participants
+                ]["Topic"].tolist()
 
-            # Update the labels map for display
-            filtered_llm_names = llm_names.copy()
-            for t in idiosyncratic_topics:
-                filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
+                # Update the labels map for display
+                # We update the 'filtered_llm_names' variable which is used in the Export section later
+                filtered_llm_names = llm_names.copy()
+                for t in idiosyncratic_topics:
+                    filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
 
-            # Update the dataframe visual to show which are valid
-            st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
+                # Update the dataframe visual to show which are valid
+                st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
+            
+            else:
+                # Fallback if diversity_stats failed to calculate (e.g. metadata missing)
+                st.caption("Topic participation stats unavailable (Metadata missing or run not finished).")
+                filtered_llm_names = llm_names.copy() # Just use original names
 
             
 

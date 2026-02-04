@@ -1015,8 +1015,8 @@ def generate_and_save_embeddings(
         st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
 
     with open(docs_file, "w", encoding="utf-8") as f:
-        json.dump(docs, f, ensure_ascii=False)
-    st.success(f"Prepared {len(docs)} documents")
+        json.dump(final_docs, f, ensure_ascii=False)
+    st.success(f"Prepared {len(final_docs)} documents")
 
     # ---------------------
     # 5. Generate Embeddings

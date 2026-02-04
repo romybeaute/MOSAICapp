@@ -419,34 +419,45 @@ def _hf_status_code(e: Exception) -> int | None:
 # """
 
 
-SYSTEM_PROMPT = """You are analysing first-person experiential reports from participants describing their subjective experiences.
+# SYSTEM_PROMPT = """You are analysing first-person experiential reports from participants describing their subjective experiences.
 
-Your task is to create a clear, meaningful label for a cluster of similar reports.
+# Your task is to create a clear, meaningful label for a cluster of similar reports.
 
-The label must:
-1. Describe WHAT participants actually experienced in plain, concrete terms
-2. Be specific enough that someone could recognize this experience from the label alone
-3. Capture the CONTENT of the experience, not just its category
-4. Use everyday language that participants themselves might use
-5. Be 3-10 words long
+# The label must:
+# 1. Describe WHAT participants actually experienced in plain, concrete terms
+# 2. Be specific enough that someone could recognize this experience from the label alone
+# 3. Capture the CONTENT of the experience, not just its category
+# 4. Use everyday language that participants themselves might use
+# 5. Be 3-10 words long
 
-BAD examples (too vague/abstract):
-- "Temporal consciousness shifts"
-- "Embodied affective processing"
+# BAD examples (too vague/abstract):
+# - "Temporal consciousness shifts"
+# - "Embodied affective processing"
 
-GOOD examples (concrete and meaningful):
-- "Feeling of merging with surroundings"
-- "Losing track of time passing"
-- "Vivid childhood memories"
-- "Sense of body expanding or shrinking"
-- "Feeling deeply calm and peaceful"
+# GOOD examples (concrete and meaningful):
+# - "Feeling of merging with surroundings"
+# - "Losing track of time passing"
+# - "Vivid childhood memories"
+# - "Sense of body expanding or shrinking"
+# - "Feeling deeply calm and peaceful"
 
-Constraints:
-- Output ONLY the label
-- 3-10 words
-- Use language a participant would understand
-- No jargon unless participants used it
-- No quotes, no punctuation, no explanation
+# Constraints:
+# - Output ONLY the label
+# - 3-10 words
+# - Use language a participant would understand
+# - No jargon unless participants used it
+# - No quotes, no punctuation, no explanation
+# """
+
+SYSTEM_PROMPT = """You are an expert phenomenologist. Your task is to perform a "phenomenological reduction" on a cluster of subjective reports.
+
+Goal: Identify the invariant structural theme shared by the majority of the reports.
+
+Rules:
+1. FOCUS ON STRUCTURE, NOT CONTENT: Do not label the specific object seen (e.g., "Night sky", "Monster"), but the mode of experience (e.g., "Sense of vastness", "Perceiving threatening entities").
+2. AVOID OUTLIERS: If a specific detail (like a specific location or object) appears in only 1-2 reports, IGNORE IT.
+3. BE CONCISE: Use scientifically precise noun phrases (3-8 words).
+4. NO META-COMMENTARY: Output ONLY the label. Do not use quotes or introductory text.
 """
 
     
@@ -481,15 +492,31 @@ Constraints:
 # Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
 # """
 
-USER_TEMPLATE = """Below are participant reports that were clustered together because they describe similar experiences:
+# USER_TEMPLATE = """Below are participant reports clustered together based on semantic similarity and should describe similar experiences:
+
+# {documents}
+
+# Keywords statistically associated with this cluster: {keywords}
+
+# Based on WHAT these participants actually describe experiencing, write a single clear label (4-10 words) that captures the shared experience. Focus on the concrete content, not abstract categories.
+
+# Output ONLY the label:"""
+
+USER_TEMPLATE = """Below are representative sentences from a single cluster of experiences:
 
 {documents}
 
-Keywords statistically associated with this cluster: {keywords}
+Keywords: {keywords}
 
-Based on WHAT these participants actually describe experiencing, write a single clear label (4-10 words) that captures the shared experience. Focus on the concrete content, not abstract categories.
+Task: Synthesize the core shared experience into a label.
 
-Output ONLY the label:"""
+Critical Constraints:
+1. Identify the *common denominator* shared by the majority of these sentences.
+2. EXCLUDE details that appear in only one or two sentences (e.g. specific objects like "night sky", "machine", or specific locations), unless they are central to the whole cluster.
+3. If the cluster is generic (e.g. just "feeling good"), use a generic label. Do not force a specific image if it isn't there.
+
+Output ONLY the label (3-8 words):"""
+
 
 def _clean_label(x: str) -> str:
     x = (x or "").strip()
@@ -1893,7 +1920,6 @@ else:
                 - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
                 """)
 
-                # 1. The Table
                 st.dataframe(
                     div_df[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
                     .sort_values("Unique_Reports", ascending=False)
@@ -1901,8 +1927,6 @@ else:
                     use_container_width=True
                 )
 
-                # 2. The Visualization (Scatter Plot)
-                # X = Topic Size, Y = Unique People
                 
 
                 chart = alt.Chart(div_df).mark_circle(size=100).encode(
@@ -1915,7 +1939,6 @@ else:
                     height=400
                 ).interactive()
 
-                # Add a diagonal line (Perfect Diversity)
                 line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
 
                 st.altair_chart(chart + line, use_container_width=True)
@@ -1929,6 +1952,30 @@ else:
                     - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
                     - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
                 """)
+
+            st.subheader("Topic Filtering")
+            min_participants = st.slider(
+                "Hide topics with fewer than N unique reports/participants",
+                min_value=1, 
+                max_value=20, 
+                value=1,
+                help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
+            )
+
+            # Identify "bad" topics
+            idiosyncratic_topics = diversity_stats[
+                diversity_stats["Unique_Reports"] < min_participants
+            ]["Topic"].tolist()
+
+            # Update the labels map for display
+            filtered_llm_names = llm_names.copy()
+            for t in idiosyncratic_topics:
+                filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
+
+            # Update the dataframe visual to show which are valid
+            st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
+
+            
 
 
             st.subheader("Export results (one row per topic)")
@@ -1983,7 +2030,7 @@ else:
                 grouped = grouped.rename(columns={"Report_ID": "report_ids"})
 
             # Map Names
-            grouped["topic_name"] = grouped["Topic"].map(llm_names).fillna("Unlabelled")
+            grouped["topic_name"] = grouped["Topic"].map(filtered_llm_names).fillna("Unlabelled")
 
             # Reorder columns
             cols = ["Topic", "topic_name", "texts"]
@@ -2029,7 +2076,7 @@ else:
                 # Prepare Long Format (Row = Sentence)
                 # We already have doc_info with IDs merged in Step 2!
                 long_df = doc_info.copy()
-                long_df["Topic Name"] = long_df["Topic"].map(llm_names).fillna("Unlabelled")
+                long_df["Topic Name"] = long_df["Topic"].map(filtered_llm_names).fillna("Unlabelled")
                 
                 # Reorder nice columns
                 desired_cols = ["Topic", "Topic Name", "Report_ID", "Document", "Original_Full_Report"]

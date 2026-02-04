@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MOSAICapp"
+version = "0.1.0"
+description = "MOSAICapp: Application for Mapping of Subjective Accounts into Interpreted Clusters"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Romy Beauté", email = "r.beaut@sussex.ac.uk"},
+]
+keywords = [
+    "topic modelling",
+    "phenomenology",
+    "consciousness research",
+    "NLP",
+    "BERTopic",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "torch",
+    "streamlit>=1.37",
+    "pandas",
+    "numpy",
+    "nltk",
+    "bertopic",
+    "umap-learn",
+    "hdbscan",
+    "scikit-learn<1.6",
+    "sentence-transformers",
+    "datamapplot",
+    "huggingface_hub>=0.31.0",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/romybeaute/MOSAICapp"
+Repository = "https://github.com/romybeaute/MOSAICapp"
+
+[tool.setuptools.packages.find]
+include = ["mosaic_core*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

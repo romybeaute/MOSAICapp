@@ -30,7 +30,7 @@ from io import BytesIO #Download button for the clustering image
 
 import hashlib
 from datetime import datetime
-
+import altair as alt
 
 
 
@@ -1568,6 +1568,53 @@ else:
                 docs, embeddings, get_config_hash(current_config)
             )
         st.session_state.latest_results = (model, reduced, labels)
+
+        # ==========================================================
+        # NEW: Load Metadata to calculate Topic Diversity
+        # ==========================================================
+        if os.path.exists(METADATA_FILE):
+            meta_df = pd.read_csv(METADATA_FILE)
+            
+            # CRITICAL: Apply the same subsampling to metadata as you did to docs
+            # (The variable 'idx' is defined in code if subsample_perc < 100)
+            if subsample_perc < 100 and 'idx' in locals():
+                meta_df = meta_df.iloc[idx].reset_index(drop=True)
+            
+            # Create a mapping dataframe: Which Topic belongs to which Original Report?
+            # We use 'model.topics_' which aligns 1:1 with 'docs' and 'meta_df'
+            topic_sources = pd.DataFrame({
+                "Topic": model.topics_,
+                "Report_ID": meta_df["_source_row_idx"],
+                "Sentence": docs
+            })
+
+            # Remove outliers (-1) for this specific analysis if desired
+            topic_sources = topic_sources[topic_sources["Topic"] != -1]
+
+            # Calculate Aggregated Stats per Topic
+            diversity_stats = topic_sources.groupby("Topic").agg(
+                Total_Sentences=('Sentence', 'count'),
+                Unique_Reports=('Report_ID', 'nunique')
+            ).reset_index()
+
+            # Calculate a "Repetition Score" 
+            # 1.0 = Perfectly diverse (Every sentence comes from a different person)
+            # Low = Repetitive (One person said many sentences in this topic)
+            diversity_stats["Diversity_Ratio"] = diversity_stats["Unique_Reports"] / diversity_stats["Total_Sentences"]
+            
+            # Map Topic Names
+            if "llm_names" in st.session_state:
+                mapping = st.session_state.llm_names
+            else:
+                # 2. Otherwise, use the default BERTopic names (e.g., "0_music_sound")
+                mapping = model.get_topic_info().set_index("Topic")["Name"].to_dict()
+            
+            diversity_stats["Name"] = diversity_stats["Topic"].map(mapping).fillna("Unlabelled")
+            
+            st.session_state.diversity_stats = diversity_stats
+        # ==========================================================
+
+
         # Store the exact docs used to fit this model (so export never mismatches)
         st.session_state.latest_docs = docs
         st.session_state.latest_csv_path = CSV_PATH
@@ -1824,10 +1871,50 @@ else:
 
 
 
+
+
             
 
             st.subheader("Topic Info")
             st.dataframe(tm.get_topic_info())
+            
+            st.subheader("Topic Participation Analysis")
+            
+            if "diversity_stats" in st.session_state:
+                div_df = st.session_state.diversity_stats
+                
+                # Metric Description
+                st.caption("""
+                **Diversity Ratio:** - **Close to 1.0 (100%):** High consensus. The topic is built from sentences spoken by many different people.
+                - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
+                """)
+
+                # 1. The Table
+                st.dataframe(
+                    div_df[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
+                    .sort_values("Unique_Reports", ascending=False)
+                    .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
+                    use_container_width=True
+                )
+
+                # 2. The Visualization (Scatter Plot)
+                # X = Topic Size, Y = Unique People
+                
+
+                chart = alt.Chart(div_df).mark_circle(size=100).encode(
+                    x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
+                    y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
+                    color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
+                    tooltip=['Name', 'Total_Sentences', 'Unique_Reports', 'Diversity_Ratio']
+                ).properties(
+                    title="Are topics driven by group consensus or individual monologues?",
+                    height=400
+                ).interactive()
+
+                # Add a diagonal line (Perfect Diversity)
+                line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
+
+                st.altair_chart(chart + line, use_container_width=True)
 
             st.subheader("Export results (one row per topic)")
 

@@ -1018,6 +1018,9 @@ def generate_and_save_embeddings(
         json.dump(final_docs, f, ensure_ascii=False)
     st.success(f"Prepared {len(final_docs)} documents")
 
+    metadata_file = docs_file.replace("_docs.json", "_metadata.csv")
+    pd.DataFrame(final_metadata_rows).to_csv(metadata_file, index=False)
+
     # ---------------------
     # 5. Generate Embeddings
     # ---------------------
@@ -1270,7 +1273,8 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col,mi
 DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
     CSV_PATH, selected_embedding_model, selected_granularity, selected_text_column, min_words
 )
-METADATA_FILE = DOCS_FILE.replace(".npy", "_metadata.csv").replace("_docs.csv", "_metadata.csv")
+# METADATA_FILE = DOCS_FILE.replace(".npy", "_metadata.csv").replace("_docs.csv", "_metadata.csv")
+METADATA_FILE = DOCS_FILE.replace("_docs.json", "_metadata.csv")
     
 # --- Cache management ---
 st.sidebar.markdown("### Cache")
@@ -2061,7 +2065,7 @@ else:
             st.dataframe(export_csv)
 
         else:
-            st.info("Click 'Run Analysis' to begin.")
+            st.info("Click 'Run Analysis' (scroll down left corner - after params selection -) to begin.")
 
     # --- HISTORY TAB ---
     with history_tab:

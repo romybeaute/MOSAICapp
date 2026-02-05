@@ -32,6 +32,8 @@ import hashlib
 from datetime import datetime
 import altair as alt
 
+from gensim.corpora import Dictionary
+from gensim.models import CoherenceModel
 
 
 #to remove funciton locally defined here, we can use importing from mosaic_core
@@ -1505,6 +1507,87 @@ else:
             c2.metric("Outliers (-1)", outlier_count)
             c3.metric("Outlier rate", f"{outlier_pct:.1f}%")
             c4.metric("Units clustered", total_units)
+
+
+            with st.expander("Model Quality Metrics (Coherence & Embeddings)"):
+                st.caption(
+                    "These metrics assess topic quality. **Topic Coherence (C_v)** measures human interpretability "
+                    "(how often top words actually appear together in the text), while **Embedding Coherence** "
+                    "measures semantic tightness (how close the words are in the vector space)."
+                )
+                
+                if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
+                    with st.spinner("Calculating coherence metrics..."):
+                        # 1. Prepare Data for Gensim (C_v)
+                        # Tokenize on the fly (fast enough for inference)
+                        tokenized_docs = [d.split() for d in docs]
+                        dictionary = Dictionary(tokenized_docs)
+                        
+                        # Get top 10 words for every active topic (excluding outliers)
+                        unique_topics = [t for t in set(tm.topics_) if t != -1]
+                        topics_top_words = [
+                            [word for word, _ in tm.get_topic(t)[:10]] 
+                            for t in unique_topics
+                        ]
+                        
+                        # 2. Calculate C_v
+                        # We use processes=1 to be safe on Cloud
+                        if topics_top_words:
+                            cm = CoherenceModel(
+                                topics=topics_top_words, 
+                                texts=tokenized_docs, 
+                                dictionary=dictionary, 
+                                coherence='c_v', 
+                                processes=1
+                            )
+                            c_v_score = cm.get_coherence()
+                        else:
+                            c_v_score = 0.0
+
+                        # 3. Calculate Embedding Coherence (Proxy)
+                        # Average cosine similarity of top 10 words in embedding space
+                        emb_coh_score = 0.0
+                        if tm.embedding_model and unique_topics:
+                            total_sim = 0
+                            valid_topics = 0
+                            for words in topics_top_words:
+                                if len(words) < 2: continue
+                                
+                                # Encode words to vectors
+                                word_embs = tm.embedding_model.encode(words)
+                                
+                                # Compute similarity matrix
+                                sim_matrix = np.inner(word_embs, word_embs)
+                                
+                                # Average of upper triangle (pairwise similarities)
+                                tri_u = sim_matrix[np.triu_indices(len(words), k=1)]
+                                
+                                if len(tri_u) > 0:
+                                    total_sim += np.mean(tri_u)
+                                    valid_topics += 1
+                            
+                            if valid_topics > 0:
+                                emb_coh_score = total_sim / valid_topics
+                        
+                        # Save to session state so we don't re-calc on every interaction
+                        st.session_state.quality_metrics = (c_v_score, emb_coh_score)
+                        st.session_state.quality_metrics_hash = get_config_hash(current_config)
+                
+                # Retrieve from cache
+                c_v, emb_coh = st.session_state.quality_metrics
+                
+                # Display
+                qc1, qc2 = st.columns(2)
+                qc1.metric(
+                    "Topic Coherence (C_v)", 
+                    f"{c_v:.3f}", 
+                    help="Measures how often the top words in a topic appear together in the original text. Good values: 0.5 - 0.7."
+                )
+                qc2.metric(
+                    "Embedding Coherence", 
+                    f"{emb_coh:.3f}", 
+                    help="Measures how mathematically close the top words are in the vector space. Higher means tighter semantic clusters."
+                )
             
             with st.expander("Show topic-size overview"):
                 # Show biggest topics first (excluding outliers)
@@ -1639,6 +1722,82 @@ else:
                     labs.append("Unlabelled")
                 else:
                     labs.append(llm_names.get(t, "Unlabelled"))
+
+
+            # --- START OUTLIER REDUCTION ---
+            if outlier_count > 0:
+                st.markdown("### Outlier Reduction")
+                with st.expander("Assign 'Unlabelled' reports to topics"):
+                    st.caption(
+                        "**Warning:** Reducing outliers alters the scientific strictness of your model. "
+                        "It forces noise points into their nearest semantic topic."
+                    )
+                    
+                    col_red1, col_red2, col_red3 = st.columns([1, 1, 1])
+                    
+                    with col_red1:
+                        red_strategy = st.selectbox(
+                            "Strategy", 
+                            ["embeddings", "c-tf-idf"],
+                            index=0, # Default to embeddings
+                            help="Embeddings: Match based on meaning (semantic vectors). c-TF-IDF: Match based on shared keywords."
+                        )
+                    
+                    with col_red2:
+                        red_threshold = st.slider(
+                            "Similarity Threshold",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.4,
+                            step=0.05,
+                            help="If an outlier's similarity to the nearest topic is below this number, it stays as an outlier. Higher = Stricter."
+                        )
+
+                    with col_red3:
+                        st.write("") # Formatting spacer
+                        if st.button("Reduce Outliers", use_container_width=True):
+                            with st.spinner(f"Reassigning outliers (Strategy: {red_strategy}, Threshold: {red_threshold})..."):
+                                try:
+                                    # 1. Calculate new assignments
+                                    # Note: We use the cached 'docs' and 'embeddings'
+                                    new_topics = tm.reduce_outliers(
+                                        docs, 
+                                        tm.topics_, 
+                                        strategy=red_strategy, 
+                                        embeddings=embeddings,
+                                        threshold=red_threshold
+                                    )
+                                    
+                                    # 2. Update the model internal state
+                                    tm.update_topics(docs, topics=new_topics)
+                                    
+                                    # 3. Regenerate labels for the visualization
+                                    # (Because topic sizes and potentially keywords changed)
+                                    new_info = tm.get_topic_info()
+                                    new_name_map = new_info.set_index("Topic")["Name"].to_dict()
+                                    
+                                    # Apply existing LLM labels if they map to valid topics
+                                    final_labels = []
+                                    current_llm_map = st.session_state.get("llm_names", {})
+                                    
+                                    for t in new_topics:
+                                        if t == -1:
+                                            final_labels.append("Unlabelled")
+                                        else:
+                                            # Prefer LLM label, fallback to new default name
+                                            lab = current_llm_map.get(t, new_name_map.get(t, f"Topic {t}"))
+                                            final_labels.append(lab)
+
+                                    # 4. Save to session state
+                                    st.session_state.latest_results = (tm, reduced, final_labels)
+                                    
+                                    # 5. Refresh UI
+                                    st.success(f"Outliers reduced! (Threshold {red_threshold})")
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"Error reducing outliers: {e}")
+            
             
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")

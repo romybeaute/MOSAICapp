@@ -1269,7 +1269,7 @@ else:
             help="Minimum points required to form a cluster. LOW (5-15): finds more, smaller clusters including niche topics (but can lead to overfitting). HIGH (30-100): only finds major themes, more outliers."
         )
         hm = st.slider(
-            "min_samples", 2, 100, 10,
+            "min_samples", 2, 100, 5,
             help="How conservative clustering is. LOW (2-5): more inclusive, fewer outliers, but may merge distinct topics. HIGH (15+): stricter, more outliers, but clusters are more coherent. Should typically be ≤ min_cluster_size."
         )
 

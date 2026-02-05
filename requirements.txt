@@ -15,5 +15,6 @@ huggingface_hub
 matplotlib
 huggingface_hub>=0.31.0
 pytest
+gensim>=4.0.0
 # llama-cpp-python
 # https://github.com/romybeaute/MOSAIC/tree/mosaic2.1/src/mosaic

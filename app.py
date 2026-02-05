@@ -1547,19 +1547,18 @@ else:
                         # 3. Calculate Embedding Coherence (Proxy)
                         # Average cosine similarity of top 10 words in embedding space
                         emb_coh_score = 0.0
-                        if tm.embedding_model and unique_topics:
+
+                        active_embedding_model = load_embedding_model(selected_embedding_model)
+                        if unique_topics:
                             total_sim = 0
                             valid_topics = 0
                             for words in topics_top_words:
                                 if len(words) < 2: continue
                                 
-                                # Encode words to vectors
-                                word_embs = tm.embedding_model.encode(words)
+                                # Use the explicitly loaded model here:
+                                word_embs = active_embedding_model.encode(words)
                                 
-                                # Compute similarity matrix
                                 sim_matrix = np.inner(word_embs, word_embs)
-                                
-                                # Average of upper triangle (pairwise similarities)
                                 tri_u = sim_matrix[np.triu_indices(len(words), k=1)]
                                 
                                 if len(tri_u) > 0:

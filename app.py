@@ -382,7 +382,6 @@ def get_hf_client(model_id: str):
         except Exception:
             token = None
 
-    # Bake the model into the client so you don't pass model= every call
     client = InferenceClient(model=model_id, token=token)
     return client, token
 
@@ -395,59 +394,7 @@ def _hf_status_code(e: Exception) -> int | None:
     resp = getattr(e, "response", None)
     return getattr(resp, "status_code", None)
 
-# SYSTEM_PROMPT = """You are an expert phenomenologist analysing first-person experiential reports or microphenomenological interviews.
 
-# Your task is to assign a concise label to a cluster of similar reports by identifying the
-# shared lived experiential structure or process they describe.
-
-# The label must:
-# 1. Describe what changes in experience itself (e.g. boundaries, temporality, embodiment, agency, affect, meaning).
-# 2. Capture the underlying experiential process or structural transformation, not surface narrative details.
-# 3. Be specific and distinctive, but at the level of experiential structure rather than anecdotal content.
-# 4. Use phenomenological language that describes how cognitive, affective, or perceptual processes are lived, rather than analytic or evaluative abstractions.
-# 5. Be conceptually focused on a single dominant experiential pattern.
-# 6. Be concise and noun-phrase-like.
-
-# Constraints:
-# - Output ONLY the label (no explanation).
-# - 3–8 words.
-# - Avoid surface-specific details unless they reflect a recurring experiential structure.
-# - Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, evaluation) unless they directly describe how the process is experienced.
-# - Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
-# - No punctuation, no quotes, no extra text.
-# - Do not explain your reasoning.
-# """
-
-
-# SYSTEM_PROMPT = """You are analysing first-person experiential reports from participants describing their subjective experiences.
-
-# Your task is to create a clear, meaningful label for a cluster of similar reports.
-
-# The label must:
-# 1. Describe WHAT participants actually experienced in plain, concrete terms
-# 2. Be specific enough that someone could recognize this experience from the label alone
-# 3. Capture the CONTENT of the experience, not just its category
-# 4. Use everyday language that participants themselves might use
-# 5. Be 3-10 words long
-
-# BAD examples (too vague/abstract):
-# - "Temporal consciousness shifts"
-# - "Embodied affective processing"
-
-# GOOD examples (concrete and meaningful):
-# - "Feeling of merging with surroundings"
-# - "Losing track of time passing"
-# - "Vivid childhood memories"
-# - "Sense of body expanding or shrinking"
-# - "Feeling deeply calm and peaceful"
-
-# Constraints:
-# - Output ONLY the label
-# - 3-10 words
-# - Use language a participant would understand
-# - No jargon unless participants used it
-# - No quotes, no punctuation, no explanation
-# """
 
 SYSTEM_PROMPT = """You are an expert phenomenologist. Your task is to perform a "phenomenological reduction" on a cluster of subjective reports.
 
@@ -460,47 +407,7 @@ Rules:
 4. NO META-COMMENTARY: Output ONLY the label. Do not use quotes or introductory text.
 """
 
-    
-# SYSTEM_PROMPT = """You are an expert phenomenologist analysing subjective reflections from specific experiences.
-# Your task is to label a cluster of similar experiential reports.
 
-# The title should be:
-# 1. HIGHLY SPECIFIC to the experiential characteristic unique to this "phenomenological" cluster
-# 2. PHENOMENOLOGICALLY DESCRIPTIVE (focus on *what* was felt/seen).
-# 3. DISTINCTIVE enough that it wouldn't apply equally well to other "phenomenological" clusters
-# 4. TECHNICALLY PRECISE, using domain-specific terminology where appropriate
-# 5. CONCEPTUALLY FOCUSED on the core specificities of this type of experience
-# 6. CONCISE and NOUN-PHRASE LIKE (e.g. "body boundary dissolution", not "Experience of body boundary dissolution").
-
-
-# Constraints:
-# - Output ONLY the label (no explanation).
-# - 3–7 words.
-# - Avoid generic wrappers such as "experience of", "phenomenon of", "state of" unless they are absolutely necessary.
-# - No punctuation, no quotes, no extra text.
-# - Do not explain your reasoning
-# """
-
-
-# USER_TEMPLATE = """Here is a cluster of participant reports describing a specific phenomenon:
-
-# {documents}
-
-# Top keywords associated with this cluster:
-# {keywords}
-
-# Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
-# """
-
-# USER_TEMPLATE = """Below are participant reports clustered together based on semantic similarity and should describe similar experiences:
-
-# {documents}
-
-# Keywords statistically associated with this cluster: {keywords}
-
-# Based on WHAT these participants actually describe experiencing, write a single clear label (4-10 words) that captures the shared experience. Focus on the concrete content, not abstract categories.
-
-# Output ONLY the label:"""
 
 USER_TEMPLATE = """Below are representative sentences from a single cluster of experiences:
 
@@ -519,29 +426,31 @@ Output ONLY the label (3-8 words):"""
 
 
 def _clean_label(x: str) -> str:
+    # 1. Safety: Handle None
     x = (x or "").strip()
-    x = x.splitlines()[0].strip()          # first line only
+    
+    # 2. Safety: Take first line only (if LLM rambles)
+    x = x.splitlines()[0].strip()
+    
+    # 3. Aesthetics: Remove surrounding quotes
     x = x.strip(' "\'`')
-    x = re.sub(r"[.:\-–—]+$", "", x).strip()  # remove trailing punctuation
-    # enforce "no punctuation" lightly (optional):
-    x = re.sub(r"[^\w\s]", "", x).strip()
-    # Optional: de-wrap generic "experience/phenomenon/state" wrappers
-    # Leading patterns like "Experiential/Experience of ..."
+    
+    # 4. Aesthetics: Remove trailing punctuation (.,;:)
+    x = re.sub(r"[.,;:]+$", "", x).strip()
+    
+    # 5. Semantic Cleaning: Remove "Experience of..." prefixes
+    #    (Keep this! It helps keep labels concise)
     x = re.sub(
         r"^(Experiential(?:\s+Phenomenon)?|Experience|Experience of|Subjective Experience of|Phenomenon of)\s+",
         "",
         x,
         flags=re.IGNORECASE,
     )
-    # Trailing "experience/phenomenon/state"
-    x = re.sub(
-        r"\s+(experience|experiences|phenomenon|state|states)$",
-        "",
-        x,
-        flags=re.IGNORECASE,
-    )
 
+    # 6. Final cleanup
     x = x.strip()
+    
+    # 7. Fallback if empty
     return x or "Unlabelled"
 
 
@@ -605,24 +514,6 @@ def generate_labels_via_chat_completion(
         # Store one example prompt (for UI inspection) – will be overwritten each run
         st.session_state["hf_last_example_prompt"] = user_prompt
 
-        # # --- THE KEY PART: chat_completion ---
-        # out = client.chat_completion(
-        #     model=model_id,
-        #     messages=[
-        #         {"role": "system", "content": SYSTEM_PROMPT},
-        #         {"role": "user", "content": user_prompt},
-        #     ],
-        #     max_tokens=24,
-        #     temperature=temperature,
-        #     stop=["\n"],
-        # )
-        # # ------------------------------------
-
-        # raw = out.choices[0].message.content
-        # labels[int(tid)] = _clean_label(raw)
-
-
-        # --- THE KEY PART: chat_completion ---
         try:
             out = client.chat_completion(
                 model=model_id,
@@ -639,7 +530,6 @@ def generate_labels_via_chat_completion(
             if provider_model:
                 st.session_state["hf_last_provider_model"] = provider_model
         except Exception as e:
-            # Nice message for the specific 402 you're seeing
             if _hf_status_code(e) == 402:
                 raise RuntimeError(
                     "Hugging Face returned 402 Payment Required for this LLM call. "
@@ -723,7 +613,7 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
             config["vectorizer_params"]["ngram_range"]
         )
 
-    rep_model = None  # <-- Use BERTopic defaults for representation
+    rep_model = None  # Use BERTopic defaults for representation
 
     umap_model = UMAP(random_state=42, metric="cosine", **config["umap_params"])
     hdbscan_model = HDBSCAN(
@@ -775,150 +665,6 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
     return topic_model, reduced, all_labels, len(info) - 1, outlier_pct
 
 
-# =====================================================================
-# 6. CSV → documents → embeddings pipeline
-# =====================================================================
-
-
-# def generate_and_save_embeddings(
-#     csv_path,
-#     docs_file,
-#     emb_file,
-#     selected_embedding_model,
-#     split_sentences,
-#     device,
-#     text_col=None,
-#     min_words: int = 0, #for removal of sentences with <N words
-# ):
-
-#     # ---------------------
-#     # Load & clean CSV
-#     # ---------------------
-#     st.info(f"Reading and preparing CSV: {csv_path}")
-#     df = pd.read_csv(csv_path)
-
-#     if text_col is not None and text_col in df.columns:
-#         col = text_col
-#     else:
-#         col = _pick_text_column(df)
-
-#     if col is None:
-#         st.error("CSV must contain at least one text column.")
-#         return
-
-#     if col != "reflection_answer_english":
-#         df = df.rename(columns={col: "reflection_answer_english"})
-
-#     df.dropna(subset=["reflection_answer_english"], inplace=True)
-#     df["reflection_answer_english"] = df["reflection_answer_english"].astype(str)
-#     df = df[df["reflection_answer_english"].str.strip() != ""]
-#     reports = df["reflection_answer_english"].tolist()
-
-#     #change to add data sanity check
-#     granularity_label = "sentences" if split_sentences else "reports"
-    
-#     #change to account for sentence removal when < N words
-#     if split_sentences:
-#         try:
-#             sentences = [s for r in reports for s in nltk.sent_tokenize(r)]
-#         except LookupError as e:
-#             st.error(f"NLTK tokenizer data not found: {e}")
-#             st.stop()
-
-#         total_units_before = len(sentences)
-
-#         if min_words and min_words > 0:
-#             docs = [s for s in sentences if len(s.split()) >= min_words]
-#             removed_texts = [s for s in sentences if len(s.split()) < min_words]
-#         else:
-#             docs = sentences
-#             removed_texts = []
-#     else:
-#         total_units_before = len(reports)
-#         if min_words and min_words > 0:
-#             docs = [r for r in reports if len(str(r).split()) >= min_words]
-#             removed_texts = [r for r in reports if len(str(r).split()) < min_words]
-#         else:
-#             docs = reports
-#             removed_texts = []
-
-#     total_units_after = len(docs)
-#     removed_units = total_units_before - total_units_after
-
-#     # Store stats for later display in "Dataset summary"
-#     st.session_state["last_data_stats"] = {
-#         "granularity": granularity_label,
-#         "min_words": int(min_words or 0),
-#         "total_before": int(total_units_before),
-#         "total_after": int(total_units_after),
-#         "removed": int(removed_units),
-#     }
-#     # keep removed texts so the UI can show them
-#     st.session_state["last_removed_units"] = removed_texts
-
-#     if min_words and min_words > 0:
-        
-#         st.info(
-#             f"Preprocessing: started with {total_units_before} {granularity_label}, "
-#             f"removed {removed_units} shorter than {min_words} words; "
-#             f"{total_units_after} remaining."
-#         )
-#     else:
-#         st.info(f"Preprocessing: {total_units_after} {granularity_label} prepared.")
-
-#     np.save(docs_file, np.array(docs, dtype=object))
-#     st.success(f"Prepared {len(docs)} documents")
-
-#     # ---------------------
-#     # Embeddings
-#     # ---------------------
-#     st.info(
-#         f"Encoding {len(docs)} documents with {selected_embedding_model} on {device}"
-#     )
-
-#     model = load_embedding_model(selected_embedding_model)
-
-#     # encode_device = None
-#     # batch_size = 32
-#     # if device == "CPU":
-#     #     encode_device = "cpu"
-#     #     batch_size = 64
-
-#     encode_device = None
-#     batch_size = 32
-
-#     # If user selected CPU explicitly, skip all checks
-#     if device == "CPU":
-#         encode_device = "cpu"
-#         batch_size = 64
-#     else:
-#         # User selected GPU. We try CUDA -> MPS -> CPU
-#         import torch
-#         if torch.cuda.is_available():
-#             encode_device = "cuda"
-#             st.toast("Using NVIDIA GPU (CUDA)")
-#         elif torch.backends.mps.is_available():
-#             encode_device = "mps"
-#             st.toast("Using Apple GPU (MPS)")
-#         else:
-#             encode_device = "cpu"
-#             st.warning("No GPU found (neither CUDA nor MPS). Falling back to CPU.")
-
-#     embeddings = model.encode(
-#         docs,
-#         show_progress_bar=True,
-#         batch_size=batch_size,
-#         device=encode_device,
-#         convert_to_numpy=True,
-#     )
-#     embeddings = np.asarray(embeddings, dtype=np.float32)
-#     np.save(emb_file, embeddings)
-
-#     st.success("Embedding generation complete!")
-#     st.balloons()
-#     st.rerun()
-
-
 
 def generate_and_save_embeddings(
     csv_path,
@@ -946,7 +692,7 @@ def generate_and_save_embeddings(
         st.error("CSV must contain at least one text column.")
         return
 
-    # Standardize the text column name
+    # Standardise the text column name
     if col != "reflection_answer_english":
         df = df.rename(columns={col: "reflection_answer_english"})
 
@@ -973,7 +719,7 @@ def generate_and_save_embeddings(
         for idx, row in df.iterrows():
             report_text = row["reflection_answer_english"]
             
-            # Tokenize
+            # Tokenise
             try:
                 sentences = nltk.sent_tokenize(report_text)
             except LookupError:
@@ -1154,17 +900,9 @@ else:
             st.error("Uploaded CSV is empty.")
             st.stop()
             
-        # Optional: Print which encoding worked to the logs (for your info)
         print(f"Successfully loaded CSV using {success_encoding} encoding.")
 
-        # # Just save; we’ll choose the text column later
-        # uploaded_csv_path = str((PROC_DIR / "uploaded.csv").resolve())
-        # tmp_df.to_csv(uploaded_csv_path, index=False)
-        # st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
-        # CSV_PATH = uploaded_csv_path
 
-        # FIX: Use the original filename to avoid cache collisions
-        # We sanitize the name to be safe for file systems
         safe_filename = _slugify(os.path.splitext(up.name)[0])
         _cleanup_old_cache(safe_filename)
         uploaded_csv_path = str((PROC_DIR / f"{safe_filename}.csv").resolve())
@@ -1529,7 +1267,7 @@ else:
             help="Minimum points required to form a cluster. LOW (5-15): finds more, smaller clusters including niche topics (but can lead to overfitting). HIGH (30-100): only finds major themes, more outliers."
         )
         hm = st.slider(
-            "min_samples", 2, 100, 5,
+            "min_samples", 2, 100, 10,
             help="How conservative clustering is. LOW (2-5): more inclusive, fewer outliers, but may merge distinct topics. HIGH (15+): stricter, more outliers, but clusters are more coherent. Should typically be ≤ min_cluster_size."
         )
 
@@ -1587,7 +1325,7 @@ else:
     run_button = st.sidebar.button("Run Analysis", type="primary")
 
     # =================================================================
-    # 9. Visualization & History Tabs
+    # 9. Visualisation & History Tabs
     # =================================================================
     main_tab, history_tab, compare_tab = st.tabs(["Main Results", "Run History", "Compare Runs"])
 
@@ -1639,13 +1377,12 @@ else:
         st.session_state.latest_results = (model, reduced, labels)
 
         # ==========================================================
-        # NEW: Load Metadata to calculate Topic Diversity
+        # Load Metadata to calculate Topic Diversity
         # ==========================================================
         if os.path.exists(METADATA_FILE):
             meta_df = pd.read_csv(METADATA_FILE)
             
-            # CRITICAL: Apply the same subsampling to metadata as you did to docs
-            # (The variable 'idx' is defined in code if subsample_perc < 100)
+
             if subsample_perc < 100 and 'idx' in locals():
                 meta_df = meta_df.iloc[idx].reset_index(drop=True)
             
@@ -1787,10 +1524,25 @@ else:
             # -------------------------------
 
 
+            # model_id = st.text_input(
+            #     "HF model id for labelling",
+            #     value="meta-llama/Meta-Llama-3-8B-Instruct"
+            # )
             model_id = st.text_input(
                 "HF model id for labelling",
                 value="meta-llama/Meta-Llama-3-8B-Instruct",
+                help="""
+                **Must be a model supported by the Hugging Face Serverless Inference API.**
+                
+                **Recommended Models:**
+                * `meta-llama/Meta-Llama-3-8B-Instruct` (Free tier friendly, fast)
+                * `meta-llama/Llama-3.1-8B-Instruct` (Newer, smarter, but may require HF PRO)
+                * `mistralai/Mistral-7B-Instruct-v0.3` (Strict instruction following)
+
+                [Check supported models](https://huggingface.co/models?pipeline_tag=text-generation&inference=warm&sort=trending)
+                """
             )
+
             with st.expander("Show LLM configuration and prompts"):
                 # What we *request*
                 st.markdown(f"**HF model id (requested):** `{model_id}`")
@@ -1947,149 +1699,10 @@ else:
             st.subheader("Topic Info")
             st.dataframe(tm.get_topic_info())
             
-            # st.subheader("Topic Participation Analysis")
-            
-            # if "diversity_stats" in st.session_state:
-            #     div_df = st.session_state.diversity_stats
-                
-            #     # Metric Description
-            #     st.caption("""
-            #     **Diversity Ratio:** - **Close to 1.0 (100%):** High consensus. The topic is built from sentences spoken by many different people.
-            #     - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
-            #     """)
-
-            #     st.dataframe(
-            #         div_df[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
-            #         .sort_values("Unique_Reports", ascending=False)
-            #         .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
-            #         use_container_width=True
-            #     )
-
-                
-
-            #     chart = alt.Chart(div_df).mark_circle(size=100).encode(
-            #         x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
-            #         y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
-            #         color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
-            #         tooltip=['Name', 'Total_Sentences', 'Unique_Reports', 'Diversity_Ratio']
-            #     ).properties(
-            #         title="Are topics driven by group consensus or individual monologues?",
-            #         height=400
-            #     ).interactive()
-
-            #     line = alt.Chart(pd.DataFrame({'x': [0, div_df['Total_Sentences'].max()], 'y': [0, div_df['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
-
-            #     st.altair_chart(chart + line, use_container_width=True)
-            #     st.info("""
-            #     **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
-                
-            #     This graph distinguishes between widespread shared experiences (robust structures) and highly detailed personal accounts (idiosyncratic discoveries).
-
-            #     - **The Diagonal Line (100% Diversity):** *Phenomenological Robustness.* Every sentence comes from a different participant. This indicates a structural invariant shared across the cohort.
-            #     - **The Vertical Drop:** *Idiosyncratic Discovery.* The further a dot drops below the line, the more the topic is defined by a specific individual's detailed account.
-            #         - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
-            #         - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
-            #     """)
-
-            # st.subheader("Topic Filtering")
-            # min_participants = st.slider(
-            #     "Hide topics with fewer than N unique reports/participants",
-            #     min_value=1, 
-            #     max_value=20, 
-            #     value=1,
-            #     help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
-            # )
-
-            # # Identify "bad" topics
-            # idiosyncratic_topics = diversity_stats[
-            #     diversity_stats["Unique_Reports"] < min_participants
-            # ]["Topic"].tolist()
-
-            # # Update the labels map for display
-            # filtered_llm_names = llm_names.copy()
-            # for t in idiosyncratic_topics:
-            #     filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
-
-            # # Update the dataframe visual to show which are valid
-            # st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
-
-            # st.subheader("Topic Participation Analysis")
-            
-            # # Check if we have the stats in session state
-            # if "diversity_stats" in st.session_state:
-            #     # FIX: Load into a variable named 'diversity_stats' to match the filtering logic
-            #     diversity_stats = st.session_state.diversity_stats
-                
-            #     # Metric Description
-            #     st.caption("""
-            #     **Diversity Ratio:** - **Close to 1.0 (100%):** High consensus. The topic is built from sentences spoken by many different people.
-            #     - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
-            #     """)
-
-            #     st.dataframe(
-            #         diversity_stats[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
-            #         .sort_values("Unique_Reports", ascending=False)
-            #         .style.background_gradient(subset=["Diversity_Ratio"], cmap="RdYlGn"),
-            #         use_container_width=True
-            #     )
-
-            #     chart = alt.Chart(diversity_stats).mark_circle(size=100).encode(
-            #         x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
-            #         y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
-            #         color=alt.Color('Diversity_Ratio', scale=alt.Scale(scheme='redyellowgreen'), title='Diversity'),
-            #         tooltip=['Name', 'Total_Sentences', 'Unique_Reports', 'Diversity_Ratio']
-            #     ).properties(
-            #         title="Are topics driven by group consensus or individual monologues?",
-            #         height=400
-            #     ).interactive()
-
-            #     line = alt.Chart(pd.DataFrame({'x': [0, diversity_stats['Total_Sentences'].max()], 'y': [0, diversity_stats['Total_Sentences'].max()]})).mark_line(color='grey', strokeDash=[5,5]).encode(x='x', y='y')
-
-            #     st.altair_chart(chart + line, use_container_width=True)
-            #     st.info("""
-            #     **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
-                
-            #     This graph distinguishes between widespread shared experiences (robust structures) and highly detailed personal accounts (idiosyncratic discoveries).
-
-            #     - **The Diagonal Line (100% Diversity):** *Phenomenological Robustness.* Every sentence comes from a different participant. This indicates a structural invariant shared across the cohort.
-            #     - **The Vertical Drop:** *Idiosyncratic Discovery.* The further a dot drops below the line, the more the topic is defined by a specific individual's detailed account.
-            #         - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
-            #         - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
-            #     """)
-
-            #     # --- NEW FILTERING SECTION (Indented correctly inside the if block) ---
-            #     st.subheader("Topic Filtering")
-            #     min_participants = st.slider(
-            #         "Hide topics with fewer than N unique reports/participants",
-            #         min_value=1, 
-            #         max_value=20, 
-            #         value=1,
-            #         help="Topics driven by fewer than this many unique people will be marked as 'Idiosyncratic' and excluded from the main list."
-            #     )
-
-            #     # Identify "bad" topics
-            #     idiosyncratic_topics = diversity_stats[
-            #         diversity_stats["Unique_Reports"] < min_participants
-            #     ]["Topic"].tolist()
-
-            #     # Update the labels map for display
-            #     # We update the 'filtered_llm_names' variable which is used in the Export section later
-            #     filtered_llm_names = llm_names.copy()
-            #     for t in idiosyncratic_topics:
-            #         filtered_llm_names[t] = "Too Specific (Idiosyncratic)"
-
-            #     # Update the dataframe visual to show which are valid
-            #     st.write(f"Flagged {len(idiosyncratic_topics)} topics as idiosyncratic.")
-            
-            # else:
-            #     # Fallback if diversity_stats failed to calculate (e.g. metadata missing)
-            #     st.caption("Topic participation stats unavailable (Metadata missing or run not finished).")
-            #     filtered_llm_names = llm_names.copy() # Just use original names
 
             st.subheader("Topic Participation Analysis")
             
             if "diversity_stats" in st.session_state:
-                # FIX: Rename 'div_df' to 'diversity_stats' so the filtering code below can find it
                 diversity_stats = st.session_state.diversity_stats
                 
                 # Metric Description
@@ -2098,7 +1711,7 @@ else:
                 - **Close to 0.0 (0%):** Low consensus. The topic is mostly one or two people talking a lot (monopolising the topic).
                 """)
 
-                # 1. The Table
+
                 st.dataframe(
                     diversity_stats[["Topic", "Name", "Total_Sentences", "Unique_Reports", "Diversity_Ratio"]]
                     .sort_values("Unique_Reports", ascending=False)
@@ -2106,7 +1719,6 @@ else:
                     use_container_width=True
                 )
 
-                # 2. The Visualization
                 chart = alt.Chart(diversity_stats).mark_circle(size=100).encode(
                     x=alt.X('Total_Sentences', title='Total Sentences in Topic'),
                     y=alt.Y('Unique_Reports', title='Unique Reports (Participants)'),
@@ -2121,7 +1733,7 @@ else:
 
                 st.altair_chart(chart + line, use_container_width=True)
                 
-                # --- RESTORED: Your explanatory text ---
+
                 st.info("""
                 **Topic Distribution: Robustness vs. Idiosyncratic Discovery**
                 
@@ -2132,9 +1744,7 @@ else:
                     - **Green (High Diversity):** Represents a shared, inter-subjective pattern.
                     - **Red (Low Diversity):** Represents a deep, specific, or unique individual experience.
                 """)
-                # ---------------------------------------
 
-                # --- NEW: Topic Filtering (NameError Fixed) ---
                 st.subheader("Topic Filtering")
                 min_participants = st.slider(
                     "Hide topics with fewer than N unique reports/participants",
@@ -2168,7 +1778,7 @@ else:
             if model_docs is not None and len(docs) != len(model_docs):
                 st.caption("Note: Dataset size changed since model training. Re-run 'Run Analysis' for accurate mapping.")
 
-            # 1. Get Base Data (Docs + Topics)
+
             docs_for_export = st.session_state.get("latest_docs", getattr(tm, "docs_", docs))
             
             if len(docs_for_export) != len(tm.topics_):
@@ -2177,8 +1787,7 @@ else:
             
             doc_info = tm.get_document_info(docs_for_export)[["Document", "Topic"]]
 
-            # 2. MERGE METADATA (The Missing Step)
-            # We add the IDs to the main dataframe immediately so they exist everywhere
+
             if os.path.exists(METADATA_FILE):
                 try:
                     meta_df = pd.read_csv(METADATA_FILE)
@@ -2191,13 +1800,12 @@ else:
                 except Exception as e:
                     st.warning(f"Could not load metadata IDs: {e}")
 
-            # 3. Filter Outliers (Optional)
+
             include_outliers = st.checkbox("Include outlier topic (-1)", value=False)
             if not include_outliers:
                 doc_info = doc_info[doc_info["Topic"] != -1]
 
-            # 4. Build Summary Table (Group by Topic)
-            # We aggregate Texts into a list AND IDs into a list
+
             agg_funcs = {"Document": list}
             if "Report_ID" in doc_info.columns:
                 agg_funcs["Report_ID"] = list
@@ -2249,16 +1857,13 @@ else:
 
             with cC:
                 jsonl_name = f"topics_{base}_{gran}.jsonl"
-                # JSONL logic (omitted for brevity, same as before but using export_topics)
                 if st.button("Save JSONL to eval/", use_container_width=True):
-                    # ... (Your existing JSONL save logic here) ...
                     st.success(f"Saved JSONL")
 
             with cR:
                 long_csv_name = f"all_sentences_{base}_{gran}.csv"
                 
                 # Prepare Long Format (Row = Sentence)
-                # We already have doc_info with IDs merged in Step 2!
                 long_df = doc_info.copy()
                 long_df["Topic Name"] = long_df["Topic"].map(filtered_llm_names).fillna("Unlabelled")
                 
@@ -2281,192 +1886,6 @@ else:
 
 
 
-
-            # model_docs = getattr(tm, "docs_", None)
-            # if model_docs is not None and len(docs) != len(model_docs):
-            #     st.caption(
-            #         "Note: export uses the original documents from the topic-model run. "
-            #         "The current dataset size is different (e.g. sampling/splitting changed), "
-            #         "so you may want to re-run topic modelling before exporting."
-            #     )
-
-            # # Always export using the same docs the model was trained on
-            # docs_for_export = st.session_state.get("latest_docs", None)
-            
-            # # Fallback if session_state was cleared
-            # if docs_for_export is None:
-            #     docs_for_export = getattr(tm, "docs_", None)
-            
-            # # Final fallback (won't usually be needed)
-            # if docs_for_export is None:
-            #     docs_for_export = docs
-            
-            # # Hard safety check to prevent the ValueError
-            # if len(docs_for_export) != len(tm.topics_):
-            #     st.error(
-            #         "Cannot export: the current docs don't match the model (dataset / subsample / filter changed). "
-            #         "Please re-run **Run Analysis** for the current configuration."
-            #     )
-            #     st.stop()
-            
-            # doc_info = tm.get_document_info(docs_for_export)[["Document", "Topic"]]
-
-
-            # include_outliers = st.checkbox(
-            #     "Include outlier topic (-1)", value=False
-            # )
-            # if not include_outliers:
-            #     doc_info = doc_info[doc_info["Topic"] != -1]
-
-            # grouped = (
-            #     doc_info.groupby("Topic")["Document"]
-            #     .apply(list)
-            #     .reset_index(name="texts")
-            # )
-            # grouped["topic_name"] = grouped["Topic"].map(llm_names).fillna(
-            #     "Unlabelled"
-            # )
-
-            # export_topics = (
-            #     grouped.rename(columns={"Topic": "topic_id"})[
-            #         ["topic_id", "topic_name", "texts"]
-            #     ]
-            #     .sort_values("topic_id")
-            #     .reset_index(drop=True)
-            # )
-
-            # SEP = "\n"
-
-            # export_csv = export_topics.copy()
-            # export_csv["texts"] = export_csv["texts"].apply(
-            #     lambda lst: SEP.join(map(str, lst))
-            # )
-
-            # base = os.path.splitext(os.path.basename(CSV_PATH))[0]
-            # gran = "sentences" if selected_granularity else "reports"
-            # csv_name = f"topics_{base}_{gran}.csv"
-            # jsonl_name = f"topics_{base}_{gran}.jsonl"
-            # csv_path = (EVAL_DIR / csv_name).resolve()
-            # jsonl_path = (EVAL_DIR / jsonl_name).resolve()
-
-            # cL, cC, cR = st.columns(3)
-
-            # with cL:
-            #     if st.button("Save CSV to eval/", use_container_width=True):
-            #         try:
-            #             export_csv.to_csv(csv_path, index=False)
-            #             st.success(f"Saved CSV → {csv_path}")
-            #         except Exception as e:
-            #             st.error(f"Failed to save CSV: {e}")
-
-            # with cC:
-            #     if st.button("Save JSONL to eval/", use_container_width=True):
-            #         try:
-            #             with open(jsonl_path, "w", encoding="utf-8") as f:
-            #                 for _, row in export_topics.iterrows():
-            #                     rec = {
-            #                         "topic_id": int(row["topic_id"]),
-            #                         "topic_name": row["topic_name"],
-            #                         "texts": list(map(str, row["texts"])),
-            #                     }
-            #                     f.write(
-            #                         json.dumps(rec, ensure_ascii=False) + "\n"
-            #                     )
-            #             st.success(f"Saved JSONL → {jsonl_path}")
-            #         except Exception as e:
-            #             st.error(f"Failed to save JSONL: {e}")
-
-            # with cR:
-
-            #     # # Create a Long Format DataFrame (One row per sentence)
-            #     # # This ensures NO text is hidden due to Excel cell limits
-            #     # long_format_df = doc_info.copy()
-            #     # long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
-                
-            #     # # Reorder columns for clarity
-            #     # long_format_df = long_format_df[["Topic", "Topic Name", "Document"]]
-
-            #     # # === NEW: Merge Metadata if available ===
-            #     # if os.path.exists(METADATA_FILE):
-            #     #     try:
-            #     #         meta_df = pd.read_csv(METADATA_FILE)
-            #     #         # Only merge if the lengths match exactly (safety check)
-            #     #         if len(meta_df) == len(long_format_df):
-            #     #             long_format_df = pd.concat([
-            #     #                 long_format_df.reset_index(drop=True), 
-            #     #                 meta_df.reset_index(drop=True)
-            #     #             ], axis=1)
-            #     #     except Exception:
-            #     #         pass # If it fails, we just download the data without metadata
-            #     # # ========================================
-                
-            #     # # Define filename
-            #     # long_csv_name = f"all_sentences_{base}_{gran}.csv"
-                
-            #     # st.download_button(
-            #     #     "Download All Sentences (Long Format)",
-            #     #     data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
-            #     #     file_name=long_csv_name,
-            #     #     mime="text/csv",
-            #     #     use_container_width=True,
-            #     #     help="Download a CSV with one row per sentence. Best for checking exactly which sentences belong to which topic."
-            #     # )
-            #     with cR:
-            #         # Create a Long Format DataFrame (One row per sentence)
-            #         long_format_df = doc_info.copy()
-                    
-            #         # Add human-readable labels
-            #         long_format_df["Topic Name"] = long_format_df["Topic"].map(llm_names).fillna("Unlabelled")
-
-            #         # === UPDATED: Merge Metadata & Rename IDs ===
-            #         if os.path.exists(METADATA_FILE):
-            #             try:
-            #                 meta_df = pd.read_csv(METADATA_FILE)
-                            
-            #                 # Only merge if lengths match (Safety check)
-            #                 if len(meta_df) == len(long_format_df):
-                                
-            #                     # 1. Rename the ID column to be very clear
-            #                     if "_source_row_idx" in meta_df.columns:
-            #                         meta_df = meta_df.rename(columns={"_source_row_idx": "Report_ID"})
-                                    
-            #                     # 2. Rename the text column if it exists in metadata (to avoid confusion)
-            #                     if "reflection_answer_english" in meta_df.columns:
-            #                         meta_df = meta_df.rename(columns={"reflection_answer_english": "Original_Full_Report"})
-
-            #                     # 3. Merge side-by-side
-            #                     long_format_df = pd.concat([
-            #                         long_format_df.reset_index(drop=True), 
-            #                         meta_df.reset_index(drop=True)
-            #                     ], axis=1)
-                                
-            #             except Exception as e:
-            #                 st.warning(f"Could not merge metadata: {e}")
-            #         # ========================================
-                    
-            #         # Reorder columns: Put ID and Topic first
-            #         cols = list(long_format_df.columns)
-            #         # Try to move Report_ID to the front if it exists
-            #         if "Report_ID" in cols:
-            #             cols.insert(0, cols.pop(cols.index("Report_ID")))
-                    
-            #         long_format_df = long_format_df[cols]
-
-            #         # Define filename
-            #         long_csv_name = f"all_sentences_{base}_{gran}.csv"
-                    
-            #         st.download_button(
-            #             "Download All Sentences (Long Format)",
-            #             data=long_format_df.to_csv(index=False).encode("utf-8-sig"),
-            #             file_name=long_csv_name,
-            #             mime="text/csv",
-            #             use_container_width=True,
-            #             help="Includes Report_ID to trace sentences back to their author."
-            #         )
-            # st.subheader("Export preview")
-            # # st.caption("Preview (one row per topic)")
-            # st.dataframe(export_csv)
-
         else:
             st.info("Click 'Run Analysis' (scroll down left corner - after params selection -) to begin.")
 
@@ -2479,9 +1898,7 @@ else:
             for i, entry in enumerate(st.session_state.history):
                 with st.expander(f"Run {i+1} — {entry['timestamp']}"):
                     st.write(f"**Topics:** {entry['num_topics']}")
-                    # st.write(
-                    #     f"**Outliers:** {entry.get('outlier_pct', entry.get('outlier_perc', 'N/A'))}"
-                    # )
+
                     outp = entry.get("outlier_pct", None)
                     if isinstance(outp, (int, float)):
                         st.write(f"**Outliers:** {outp:.2f}%")

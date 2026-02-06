@@ -1525,14 +1525,18 @@ else:
                         
                         # Get top 10 words for every active topic (excluding outliers)
                         unique_topics = [t for t in set(tm.topics_) if t != -1]
-                        topics_top_words = [
-                            [word for word, _ in tm.get_topic(t)[:10]] 
-                            for t in unique_topics
-                        ]
-                        
+                        topics_top_words = []
+                        for t in unique_topics:
+                            topic_words = tm.get_topic(t)
+                            # tm.get_topic() can return False or empty for some topics
+                            if topic_words and topic_words is not False:
+                                words = [word for word, _ in topic_words[:10]]
+                                if words:  # Only add non-empty word lists
+                                    topics_top_words.append(words)
+
                         # 2. Calculate C_v
                         # We use processes=1 to be safe on Cloud
-                        if topics_top_words:
+                        if topics_top_words and len(topics_top_words) > 0:
                             cm = CoherenceModel(
                                 topics=topics_top_words, 
                                 texts=tokenized_docs, 
@@ -1549,7 +1553,7 @@ else:
                         emb_coh_score = 0.0
 
                         active_embedding_model = load_embedding_model(selected_embedding_model)
-                        if unique_topics:
+                        if topics_top_words:
                             total_sim = 0
                             valid_topics = 0
                             for words in topics_top_words:

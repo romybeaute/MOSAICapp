@@ -2,8 +2,8 @@
 File: app.py
 Description: Streamlit app for advanced topic modeling on Innerspeech dataset
              with BERTopic, UMAP, HDBSCAN. (LLM features disabled for lite deployment)
-Last Modified: 23/12/2025
-@author: r.beaut@sussex.ac.uk
+Last Modified: 25/02/2026
+@corresp author: r.beaut@sussex.ac.uk
 """
 
 # =====================================================================
@@ -25,7 +25,7 @@ from huggingface_hub import InferenceClient # for the LLM API command
 
 from typing import Any
 
-from io import BytesIO #Download button for the clustering image
+from io import BytesIO 
 
 
 import hashlib
@@ -57,7 +57,7 @@ NLTK_DATA_DIR = "/usr/local/share/nltk_data"
 if NLTK_DATA_DIR not in nltk.data.path:
     nltk.data.path.append(NLTK_DATA_DIR)
 
-# Try to ensure both punkt_tab (new NLTK) and punkt (old NLTK) are available
+# try to ensure both punkt_tab (new NLTK) and punkt (old NLTK) are available
 for resource in ("punkt_tab", "punkt"):
     try:
         nltk.data.find(f"tokenizers/{resource}")
@@ -105,8 +105,6 @@ except Exception:
 
 # BERTopic stack
 from bertopic import BERTopic
-# from bertopic.representation import LlamaCPP  # <-- REMOVED
-# from llama_cpp import Llama  # <-- REMOVED
 from sentence_transformers import SentenceTransformer
 
 # Clustering/dimensionality reduction
@@ -137,10 +135,9 @@ def _cleanup_old_cache(current_slug: str):
     removed_count = 0
     cache_files = list(CACHE_DIR.glob("precomputed_*.npy")) + list(CACHE_DIR.glob("precomputed_*_docs.json"))
     for p in cache_files:
-        # If the file belongs to a different dataset (doesn't contain the new slug)
         if current_slug not in p.name:
             try:
-                p.unlink() # Delete file
+                p.unlink() 
                 removed_count += 1
             except Exception as e:
                 print(f"Error deleting {p.name}: {e}")
@@ -148,7 +145,7 @@ def _cleanup_old_cache(current_slug: str):
     if removed_count > 0:
         print(f"Auto-cleanup: Removed {removed_count} old cache files.")
 
-# "Nice" default names we know from MOSAIC; NOT a hard constraint anymore
+# default names we know from MOSAIC but NOT a hard constraint
 ACCEPTABLE_TEXT_COLUMNS = [
     "reflection_answer_english",
     "reflection_answer",
@@ -167,8 +164,8 @@ def _pick_text_column(df: pd.DataFrame) -> str | None:
 
 def _list_text_columns(df: pd.DataFrame) -> list[str]:
     """
-    Return all columns; we’ll cast the chosen one to string later.
-    This makes the selector work with any column name / dtype.
+    Return all columns
+    makes the selector work with any column name / dtype
     """
     return list(df.columns)
 
@@ -281,7 +278,7 @@ def save_run_snapshot(
     n_topics = int((info["Topic"] != -1).sum()) if "Topic" in info.columns else None
     outlier_pct = (100.0 * outlier_count / n_units) if n_units else 0.0
 
-    # --- save plot ---
+
     fig, _ = datamapplot.create_plot(
         reduced,
         labs,
@@ -296,11 +293,11 @@ def save_run_snapshot(
     fig.savefig(plot_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    # --- save topic info ---
+    # save topic info
     topic_info_csv = run_dir / "topic_info.csv"
     info.to_csv(topic_info_csv, index=False)
 
-    # --- save meta ---
+    # save meta
     meta = {
         "run_id": run_id,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -341,7 +338,7 @@ def _list_server_csvs(proc_dir: Path) -> list[str]:
     return [str(p) for p in sorted(proc_dir.glob("*.csv"))]
 
 
-DATASETS = None  # keep name for clarity; we’ll fill it when rendering the sidebar
+DATASETS = None  
 HISTORY_FILE = str(PROC_DIR / "run_history.json")
 
 # =====================================================================
@@ -368,13 +365,11 @@ def load_precomputed_data(docs_file, embeddings_file):
 # 4. LLM loaders
 # =====================================================================
 
-# Approximate price for cost estimates in the UI only.
+# Approximate price for cost estimates in the UI only
 # Novita Llama 3 8B is around $0.04 per 1M input tokens
-# and $0.04 per 1M output tokens – adjust if needed.
 HF_APPROX_PRICE_PER_MTOKENS_USD = 0.04
 
 
-#ADDED FOR LLM (START)
 @st.cache_resource
 def get_hf_client(model_id: str):
     token = os.environ.get("HF_TOKEN")
@@ -392,7 +387,7 @@ def _labels_cache_path(config_hash: str, model_id: str) -> Path:
     return CACHE_DIR / f"llm_labels_{safe_model}_{config_hash}.json"
 
 def _hf_status_code(e: Exception) -> int | None:
-    """Extract HTTP status code from a huggingface_hub error, if present."""
+    """Extract HTTP status code from huggingface_hub error, if present."""
     resp = getattr(e, "response", None)
     return getattr(resp, "status_code", None)
 
@@ -428,20 +423,19 @@ Output ONLY the label (3-8 words):"""
 
 
 def _clean_label(x: str) -> str:
-    # 1. Safety: Handle None
+    # handle None
     x = (x or "").strip()
     
-    # 2. Safety: Take first line only (if LLM rambles)
+    # take first line only (if LLM rambles)
     x = x.splitlines()[0].strip()
     
-    # 3. Aesthetics: Remove surrounding quotes
+    # remove surrounding quotes
     x = x.strip(' "\'`')
     
-    # 4. Aesthetics: Remove trailing punctuation (.,;:)
+    # remove trailing punctuation (.,;:)
     x = re.sub(r"[.,;:]+$", "", x).strip()
     
-    # 5. Semantic Cleaning: Remove "Experience of..." prefixes
-    #    (Keep this! It helps keep labels concise)
+    # remove "Experience of..." prefixes
     x = re.sub(
         r"^(Experiential(?:\s+Phenomenon)?|Experience|Experience of|Subjective Experience of|Phenomenon of)\s+",
         "",
@@ -449,10 +443,10 @@ def _clean_label(x: str) -> str:
         flags=re.IGNORECASE,
     )
 
-    # 6. Final cleanup
+    # final cleanup
     x = x.strip()
     
-    # 7. Fallback if empty
+    # fallback if empty
     return x or "Unlabelled"
 
 
@@ -469,11 +463,10 @@ def generate_labels_via_chat_completion(
     temperature: float = 0.2, #deterministic, stable outputs.
     force: bool = False) -> dict[int, str]:
     """
-    Label topics AFTER fitting (fast + stable on Spaces).
+    Label topics after fitting (fast + stable on Spaces).
     Returns {topic_id: label}.
     """
 
-    # Remember which HF model id we requested on the last run
     st.session_state["hf_last_model_param"] = model_id
     
     cache_path = _labels_cache_path(config_hash, model_id)
@@ -539,11 +532,11 @@ def generate_labels_via_chat_completion(
                     "account. Either upgrade to PRO / enable pay-as-you-go, or skip "
                     "the 'Generate LLM labels (API)' step."
                 ) from e
-            # Anything else: bubble up the original error
-            raise
-        # ------------------------------------
 
-        # --- Best-effort local accounting of token usage (this Streamlit session) ---
+            raise
+
+
+
         usage = getattr(out, "usage", None)
         total_tokens = None
 
@@ -556,7 +549,6 @@ def generate_labels_via_chat_completion(
         if total_tokens is not None:
             st.session_state.setdefault("hf_tokens_total", 0)
             st.session_state["hf_tokens_total"] += int(total_tokens)
-        # ---------------------------------------------------------------------------
 
         raw = out.choices[0].message.content
         labels[int(tid)] = _clean_label(raw)
@@ -570,7 +562,6 @@ def generate_labels_via_chat_completion(
         pass
 
     return labels
-#ADDED FOR LLM (END)
 
 
 
@@ -694,16 +685,14 @@ def generate_and_save_embeddings(
         st.error("CSV must contain at least one text column.")
         return
 
-    # Standardise the text column name
     if col != "reflection_answer_english":
         df = df.rename(columns={col: "reflection_answer_english"})
 
-    # Clean empty rows
     df.dropna(subset=["reflection_answer_english"], inplace=True)
     df["reflection_answer_english"] = df["reflection_answer_english"].astype(str)
     df = df[df["reflection_answer_english"].str.strip() != ""]
 
-    # Identify metadata columns (everything except the text)
+    # identify metadata columns (everything except the text)
     metadata_cols = [c for c in df.columns if c != "reflection_answer_english"]
 
     # ---------------------
@@ -766,7 +755,7 @@ def generate_and_save_embeddings(
             final_metadata_rows.append(meta)
 
     # ---------------------
-    # 3. Update Session State (Crucial for Dashboard UI)
+    # 3. Update Session State 
     # ---------------------
     total_units_after = len(final_docs)
     removed_count = len(removed_texts)
@@ -887,12 +876,12 @@ else:
 
         for encoding in encodings_to_try:
             try:
-                up.seek(0)  # Always reset to start of file before trying
+                up.seek(0)  
                 tmp_df = pd.read_csv(up, encoding=encoding)
                 success_encoding = encoding
-                break  # If we get here, it worked, so stop the loop
+                break  
             except UnicodeDecodeError:
-                continue  # If it fails, try the next one
+                continue  
 
         if tmp_df is None:
             st.error("Could not decode file. Please save your CSV as 'CSV UTF-8' in Excel.")
@@ -945,7 +934,6 @@ if not text_columns:
     )
     st.stop()
 
-# Try to pick a nice default (one of the MOSAIC-ish names) if present
 try:
     df_sample = pd.read_csv(CSV_PATH, nrows=2000)
     preferred = _pick_text_column(df_sample)
@@ -1040,10 +1028,10 @@ def get_precomputed_filenames(csv_path, model_name, split_sentences, text_col,mi
 DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
     CSV_PATH, selected_embedding_model, selected_granularity, selected_text_column, min_words
 )
-# METADATA_FILE = DOCS_FILE.replace(".npy", "_metadata.csv").replace("_docs.csv", "_metadata.csv")
+
 METADATA_FILE = DOCS_FILE.replace("_docs.json", "_metadata.csv")
     
-# --- Cache management ---
+# Cache management 
 st.sidebar.markdown("### Cache")
 if st.sidebar.button(
     "Clear cached files for this configuration", use_container_width=True
@@ -1202,26 +1190,6 @@ else:
 
     use_vectorizer = st.sidebar.checkbox("Use CountVectorizer", value=True,help="Enables bag-of-words representation for topic keyword extraction. Disable if you only want embedding-based clustering without keyword analysis.")
 
-    # with st.sidebar.expander("Vectorizer"):
-    #     ng_min = st.slider(
-    #         "Min N-gram", 1, 5, 1,
-    #         help="Minimum word sequence length. 1 = single words ('visual'), 2 = pairs ('visual experience'). Lower values capture basic terms."
-    #     )
-    #     ng_max = st.slider(
-    #         "Max N-gram", 1, 5, 2,
-    #         help="Maximum word sequence length. Higher values capture longer phrases but increase noise. 2-3 is usually optimal."
-    #     )
-    #     min_df = st.slider(
-    #         "Min Doc Freq", 1, 50, 1,
-    #         help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
-    #     )
-    #     stopwords = st.select_slider(
-    #         "Stopwords", 
-    #         options=[None, "english"], 
-    #         value=None,
-    #         help="Remove common English words (the, is, at, etc.)"
-    #     )
-
     with st.sidebar.expander("Vectorizer"):
         ng_min = st.slider(
             "Min N-gram", 1, 5, 1,
@@ -1236,7 +1204,7 @@ else:
             help="Minimum number of documents a term must appear in. Higher values filter out rare terms, reducing noise but potentially losing unique descriptors."
         )
         
-        # --- NEW STOPWORDS LOGIC ---
+
         st.write("Stopwords Configuration")
         use_english_stopwords = st.checkbox("Use standard English stopwords", value=True)
         
@@ -1245,7 +1213,7 @@ else:
             value="",
             help="Add context-specific words here to force the model to ignore them."
         )
-        # ---------------------------
+
 
     with st.sidebar.expander("UMAP"):
         st.caption("UMAP reduces high-dimensional embeddings to a lower-dimensional space for clustering.")
@@ -1388,8 +1356,8 @@ else:
             if subsample_perc < 100 and 'idx' in locals():
                 meta_df = meta_df.iloc[idx].reset_index(drop=True)
             
-            # Create a mapping dataframe: Which Topic belongs to which Original Report?
-            # We use 'model.topics_' which aligns 1:1 with 'docs' and 'meta_df'
+            # Create a mapping dataframe (whoch topic belongs to which original report)
+            # use 'model.topics_' which aligns 1:1 with 'docs' and 'meta_df'
             topic_sources = pd.DataFrame({
                 "Topic": model.topics_,
                 "Report_ID": meta_df["_source_row_idx"],
@@ -1399,7 +1367,7 @@ else:
             # Remove outliers (-1) for this specific analysis if desired
             topic_sources = topic_sources[topic_sources["Topic"] != -1]
 
-            # Calculate Aggregated Stats per Topic
+            # Calculate Aggregated stats per Topic
             diversity_stats = topic_sources.groupby("Topic").agg(
                 Total_Sentences=('Sentence', 'count'),
                 Unique_Reports=('Report_ID', 'nunique')
@@ -1414,24 +1382,20 @@ else:
             if "llm_names" in st.session_state:
                 mapping = st.session_state.llm_names
             else:
-                # 2. Otherwise, use the default BERTopic names (e.g., "0_music_sound")
                 mapping = model.get_topic_info().set_index("Topic")["Name"].to_dict()
             
             diversity_stats["Name"] = diversity_stats["Topic"].map(mapping).fillna("Unlabelled")
             
             st.session_state.diversity_stats = diversity_stats
-        # ==========================================================
 
 
         # Store the exact docs used to fit this model (so export never mismatches)
         st.session_state.latest_docs = docs
         st.session_state.latest_csv_path = CSV_PATH
 
-        # --- AUTO-SAVE RUN SNAPSHOT (plot + stats + topic_info) ---
         run_id = make_run_id(current_config)
         dataset_title = ds_input.strip() or DATASET_DIR
         
-        # Make sure outliers show as "Unlabelled" in the saved plot
         safe_labs = ["Unlabelled" if t == -1 else lab for t, lab in zip(model.topics_, labels)]
         
         meta = save_run_snapshot(
@@ -1445,10 +1409,10 @@ else:
         )
 
 
-        ### ADD FOR LLM (START)
+
         st.session_state.latest_config_hash = get_config_hash(current_config)
         st.session_state.latest_config = current_config
-        ### ADD FOR LLM (END)
+
 
         entry = {
             "run_id": meta["run_id"],
@@ -1479,7 +1443,7 @@ else:
             tm, reduced, labs = st.session_state.latest_results
 
 
-            ##### ADDED FOR LLM (START)
+
             st.subheader("LLM topic labelling (via Hugging Face API)")
 
 
@@ -1518,8 +1482,7 @@ else:
                 
                 if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
                     with st.spinner("Calculating coherence metrics..."):
-                        # 1. Prepare Data for Gensim (C_v)
-                        # Tokenize on the fly (fast enough for inference)
+                        # prepare Data for Gensim (C_v)
                         tokenized_docs = [d.split() for d in docs]
                         dictionary = Dictionary(tokenized_docs)
                         
@@ -1534,8 +1497,7 @@ else:
                                 if words:  # Only add non-empty word lists
                                     topics_top_words.append(words)
 
-                        # 2. Calculate C_v
-                        # We use processes=1 to be safe on Cloud
+                        # calculate C_v
                         if topics_top_words and len(topics_top_words) > 0:
                             cm = CoherenceModel(
                                 topics=topics_top_words, 
@@ -1548,8 +1510,8 @@ else:
                         else:
                             c_v_score = 0.0
 
-                        # 3. Calculate Embedding Coherence (Proxy)
-                        # Average cosine similarity of top 10 words in embedding space
+                        # calculate Embedding Coherence (Proxy)
+                        # average cosine similarity of top 10 words in embedding space
                         emb_coh_score = 0.0
 
                         active_embedding_model = load_embedding_model(selected_embedding_model)
@@ -1559,7 +1521,6 @@ else:
                             for words in topics_top_words:
                                 if len(words) < 2: continue
                                 
-                                # Use the explicitly loaded model here:
                                 word_embs = active_embedding_model.encode(words)
                                 
                                 sim_matrix = np.inner(word_embs, word_embs)
@@ -1572,14 +1533,12 @@ else:
                             if valid_topics > 0:
                                 emb_coh_score = total_sim / valid_topics
                         
-                        # Save to session state so we don't re-calc on every interaction
                         st.session_state.quality_metrics = (c_v_score, emb_coh_score)
                         st.session_state.quality_metrics_hash = get_config_hash(current_config)
                 
                 # Retrieve from cache
                 c_v, emb_coh = st.session_state.quality_metrics
                 
-                # Display
                 qc1, qc2 = st.columns(2)
                 qc1.metric(
                     "Topic Coherence (C_v)", 
@@ -1605,15 +1564,8 @@ else:
                 else:
                     st.caption("Topic-size overview unavailable (missing columns in topic info).")
 
-            # -------------------------------
-            # END Topic modelling stats (pre-LLM)
-            # -------------------------------
 
 
-            # model_id = st.text_input(
-            #     "HF model id for labelling",
-            #     value="meta-llama/Meta-Llama-3-8B-Instruct"
-            # )
             model_id = st.text_input(
                 "HF model id for labelling",
                 value="meta-llama/Meta-Llama-3-8B-Instruct",
@@ -1630,10 +1582,8 @@ else:
             )
 
             with st.expander("Show LLM configuration and prompts"):
-                # What we *request*
                 st.markdown(f"**HF model id (requested):** `{model_id}`")
             
-                # What was used on the last run, if available
                 requested_last = st.session_state.get("hf_last_model_param")
                 provider_model = st.session_state.get("hf_last_provider_model")
             
@@ -1661,7 +1611,6 @@ else:
 
             with cA:
                 max_topics = st.slider("Max topics", 5, 120, 40, 5)
-            # max_topics = cA.slider("Max topics", 5, 120, 40, 5)
 
             with cB:
                 max_docs_per_topic = st.slider(
@@ -1699,7 +1648,6 @@ else:
                     st.error(f"LLM labelling failed: {e}")
 
 
-            # Approximate HF usage for *this* Streamlit session (local estimate only)
             hf_tokens_total = st.session_state.get("hf_tokens_total", 0)
             if hf_tokens_total:
                 approx_cost = hf_tokens_total / 1_000_000 * HF_APPROX_PRICE_PER_MTOKENS_USD
@@ -1718,7 +1666,6 @@ else:
 
 
 
-            # FIX: Force outliers (Topic -1) to be "Unlabelled" so we can hide them
             labs = []
             for t in tm.topics_:
                 if t == -1:
@@ -1727,7 +1674,7 @@ else:
                     labs.append(llm_names.get(t, "Unlabelled"))
 
 
-            # --- START OUTLIER REDUCTION ---
+
             if outlier_count > 0:
                 st.markdown("### Outlier Reduction")
                 with st.expander("Assign 'Unlabelled' reports to topics"):
@@ -1761,8 +1708,6 @@ else:
                         if st.button("Reduce Outliers", use_container_width=True):
                             with st.spinner(f"Reassigning outliers (Strategy: {red_strategy}, Threshold: {red_threshold})..."):
                                 try:
-                                    # 1. Calculate new assignments
-                                    # Note: We use the cached 'docs' and 'embeddings'
                                     new_topics = tm.reduce_outliers(
                                         docs, 
                                         tm.topics_, 
@@ -1771,15 +1716,12 @@ else:
                                         threshold=red_threshold
                                     )
                                     
-                                    # 2. Update the model internal state
                                     tm.update_topics(docs, topics=new_topics)
                                     
-                                    # 3. Regenerate labels for the visualization
-                                    # (Because topic sizes and potentially keywords changed)
+
                                     new_info = tm.get_topic_info()
                                     new_name_map = new_info.set_index("Topic")["Name"].to_dict()
                                     
-                                    # Apply existing LLM labels if they map to valid topics
                                     final_labels = []
                                     current_llm_map = st.session_state.get("llm_names", {})
                                     
@@ -1787,14 +1729,11 @@ else:
                                         if t == -1:
                                             final_labels.append("Unlabelled")
                                         else:
-                                            # Prefer LLM label, fallback to new default name
                                             lab = current_llm_map.get(t, new_name_map.get(t, f"Topic {t}"))
                                             final_labels.append(lab)
 
-                                    # 4. Save to session state
                                     st.session_state.latest_results = (tm, reduced, final_labels)
                                     
-                                    # 5. Refresh UI
                                     st.success(f"Outliers reduced! (Threshold {red_threshold})")
                                     st.rerun()
                                     
@@ -1805,30 +1744,26 @@ else:
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
 
-            # Build a nice title from the dataset name
             dataset_title = ds_input.strip() or DATASET_DIR
             plot_title = f"{dataset_title}: MOSAIC's Experiential Topic Map"
             
-            # We pass 'noise_label' and 'noise_color' to grey out the outliers
             fig, _ = datamapplot.create_plot(
                 reduced,
                 labs,
-                noise_label="Unlabelled",  # Tells datamapplot: "Do not put a text label on this group"
-                noise_color="#CCCCCC",     # Sets the points to a light Grey
-                label_font_size=11,        # Optional: Adjust font size
-                arrowprops={"arrowstyle": "-", "color": "#333333"} # Optional: darker, simpler arrows
+                noise_label="Unlabelled",  
+                noise_color="#CCCCCC",     
+                label_font_size=11,        
+                arrowprops={"arrowstyle": "-", "color": "#333333"} 
             )
             fig.suptitle(plot_title, fontsize=16, y=0.99)
             st.pyplot(fig)
 
-            # --- Download / save visualisation ---
 
-            # Prepare high-res PNG bytes
+
             buf = BytesIO()
             fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
             png_bytes = buf.getvalue()
             
-            # Reuse base / gran for a nice filename later (they’re defined below as well)
             base = os.path.splitext(os.path.basename(CSV_PATH))[0]
             gran = "sentences" if selected_granularity else "reports"
             png_name = f"topics_{base}_{gran}_plot.png"
@@ -1953,7 +1888,6 @@ else:
             if os.path.exists(METADATA_FILE):
                 try:
                     meta_df = pd.read_csv(METADATA_FILE)
-                    # Safety check: Ensure lengths match before merging
                     if len(meta_df) == len(doc_info):
                         if "_source_row_idx" in meta_df.columns:
                             doc_info["Report_ID"] = meta_df["_source_row_idx"].values
@@ -1993,18 +1927,16 @@ else:
             
             export_topics = grouped[cols].sort_values("Topic").reset_index(drop=True)
 
-            # 5. Prepare CSV version (Convert lists to strings for Excel safety)
             export_csv = export_topics.copy()
             SEP = " | "
             export_csv["texts"] = export_csv["texts"].apply(lambda lst: SEP.join(map(str, lst)))
             if "report_ids" in export_csv.columns:
                 export_csv["report_ids"] = export_csv["report_ids"].apply(lambda lst: str(list(lst)))
 
-            # Filenames
             base = os.path.splitext(os.path.basename(CSV_PATH))[0]
             gran = "sentences" if selected_granularity else "reports"
             
-            # --- DISPLAY & BUTTONS ---
+
             cL, cC, cR = st.columns(3)
 
             with cL:
@@ -2025,11 +1957,9 @@ else:
             with cR:
                 long_csv_name = f"all_sentences_{base}_{gran}.csv"
                 
-                # Prepare Long Format (Row = Sentence)
                 long_df = doc_info.copy()
                 long_df["Topic Name"] = long_df["Topic"].map(filtered_llm_names).fillna("Unlabelled")
                 
-                # Reorder nice columns
                 desired_cols = ["Topic", "Topic Name", "Report_ID", "Document", "Original_Full_Report"]
                 final_cols = [c for c in desired_cols if c in long_df.columns]
                 long_df = long_df[final_cols]
@@ -2043,7 +1973,6 @@ else:
                     help="One row per sentence. Includes Report IDs."
                 )
 
-            # Show the table on screen (now with IDs!)
             st.dataframe(export_csv)
 
 

@@ -45,7 +45,7 @@ MOSAICapp is a web application for topic modelling of phenomenological text data
 
 # Statement of Need
 
-Phenomenological research in consciousness science often relies on open-ended subjective reports to capture experiential dimensions that structured instruments may miss. Questionnaires such as the Altered States of Consciousness Rating Scale [@studerus2010psychometric], the Phenomenology of Consciousness Inventory [@pekala1991quantifying], or the Minimal Phenomenal Experience Questionnaire [@gamma2021mpe] provide validated dimensional measures, but their predefined categories can constrain what researchers discover. Experiences that do not fit the existing structure are typically lost or reduced to "other" responses. Moreover, many studies do collect open-text reports alongside structured measures, yet without accessible tools for systematic analysis, especially for big dataset, these rich qualitative data can often remain unexplored—representing a significant untapped resource for understanding subjective experience.
+Phenomenological research in consciousness science often relies on open-ended subjective reports to capture experiential dimensions that structured instruments may miss. Questionnaires such as the Altered States of Consciousness Rating Scale [@studerus2010psychometric] provide validated dimensional measures, but their predefined categories can constrain what researchers discover. Experiences that do not fit the existing structure are typically lost or reduced to "other" responses. Moreover, many studies do collect open-text reports alongside structured measures, yet without accessible tools for systematic analysis, especially for big dataset, these rich qualitative data can often remain unexplored—representing a significant untapped resource for understanding subjective experience.
 
 Topic modelling offers a way to discover thematic structure directly from text, without imposing categories in advance. Traditional approaches such as Latent Dirichlet Allocation (LDA) [@blei2003latent] treat documents as bags of words without capturing semantic context—a limitation when analysing phenomenological language, where meaning often depends on subtle contextual relationships. BERTopic [@grootendorst2022bertopic] addresses this by using transformer-based embeddings that capture semantic similarity, combined with density-based clustering (HDBSCAN; @campello2013density; @mcinnes2017hdbscan) and dimensionality reduction (UMAP; @mcinnes2018umap). 
 Additionally, Large Language Models (LLMs) can be integrated to generate interpretable topic labels grounded in phenomenological terminology, moving beyond keyword-based representations.
@@ -75,7 +75,7 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 # Features
 
 
-![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels.](MOSAICapp_interface.png)
+![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels.](MOSAICapp_interface1.png)
 
 MOSAICapp provides the following capabilities through its web interface:
 

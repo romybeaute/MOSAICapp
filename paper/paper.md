@@ -76,7 +76,8 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 
 
 ![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels.](MOSAICapp_interface1.png){ width=100% }
-![Secondary view of the MOSAICapp user interface detailing extended functional parameters.](MOSAICapp_interface2.png){ width=100% }
+
+<!-- ![Secondary view of the MOSAICapp user interface detailing extended functional parameters.](MOSAICapp_interface2.png){ width=100% } -->
 
 MOSAICapp provides the following capabilities through its web interface:
 

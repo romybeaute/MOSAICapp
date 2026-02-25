@@ -16,22 +16,26 @@ authors:
   - name: Guillaume Dumas
     orcid: 0000-0002-2253-1844
     affiliation: "4, 5, 6, 7"
+  - name: David Schwartzman
+    orcid: 0000-0002-3779-396X
+    affiliation: "1"
+  - name: Anil K. Seth
+    orcid: 0000-0002-1421-6051
+    affiliation: "1, 6"
 affiliations:
   - name: Sussex Centre for Consciousness Science, University of Sussex, UK
     index: 1
   - name: Sussex AI, University of Sussex, UK
     index: 2
-  - name: UCL Centre for Consciousness Research, University College London, UK
-    index: 3
   - name: CHU Sainte-Justine Azrieli Research Center, Montréal, Québec, Canada
-    index: 4
+    index: 3
   - name: Department of Psychiatry and Addictology, University of Montréal, Montréal, Québec, Canada
-    index: 5
+    index: 4
   - name: Mila – Quebec Artificial Intelligence Institute, Montréal, Québec, Canada
-    index: 6
+    index: 5
   - name: Program for Brain, Mind, and Consciousness, Canadian Institute for Advanced Research, Toronto, Ontario, Canada
-    index: 7
-date: 27 January 2026
+    index: 6
+date: 18 February 2026
 bibliography: paper.bib
 ---
 
@@ -112,6 +116,6 @@ Generative AI tools were used during the development of MOSAICapp. GitHub Copilo
 
 # Acknowledgements
 
-This work was funded by the Be.AI Leverhulme doctoral scholarship. We thank Maarten Grootendorst for creating BERTopic, and David Schwartzman and Anil Seth for discussions on the MOSAIC methodology.
+This work was funded by the Be.AI Leverhulme doctoral scholarship.
 
 # References

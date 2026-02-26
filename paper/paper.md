@@ -78,7 +78,7 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 ![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels.](MOSAICapp_interface1.png)
 \newpage
 
-![Secondary view of the MOSAICapp user interface detailing extended functional parameters.](MOSAICapp_interface2.png){ width=100% }
+![Secondary view of the MOSAICapp user interface detailing extended functional parameters, and in particular, topic participation analysis. In this view, each point represents a discovered topic, plotted by total sentences (x-axis) against unique participants contributing to that topic (y-axis). The diagonal line indicates perfect diversity (one sentence per participant). Points near the line represent robust inter-subjective patterns shared across many participants; points falling below indicate topics dominated by detailed individual accounts. Colour encodes diversity ratio (green = high consensus, red = individual-driven)](MOSAICapp_interface2.png)
 
 MOSAICapp provides the following capabilities through its web interface:
 

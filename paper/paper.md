@@ -109,7 +109,7 @@ MOSAICapp has been used to analyse several phenomenological datasets, demonstrat
 
 **Minimal Phenomenal Experience:** The pipeline was applied to free-text descriptions of "pure awareness" states collected as part of the MPE study [@gamma2021mpe], enabling data-driven exploration of how participants describe these experiences in their own words.
 
-**Psychedelic phenomenology:** The tool has been used to analyse micro-phenomenological interview transcripts from DMT and 5-MeO-DMT studies, identifying fine-grained experiential clusters in datasets containing several thousand sentences.
+**Psychedelic phenomenology:** The tool has been used to analyse micro-phenomenological interview transcripts from psychedelic studies, identifying fine-grained experiential clusters in datasets containing several thousand sentences.
 
 The Hugging Face Space deployment has received usage from researchers without prior programming experience, demonstrating the tool's accessibility for its intended audience.
 
@@ -118,7 +118,7 @@ The Hugging Face Space deployment has received usage from researchers without pr
 Generative AI tools were used during the development of MOSAICapp. GitHub Copilot assisted with code completion and debugging during development of the Streamlit interface. All AI-assisted outputs were reviewed, validated, and edited by the human authors, who made all core design decisions and take full responsibility for the accuracy and originality of the submitted materials. No AI tools were used in the core algorithmic components, which rely on established libraries (BERTopic, UMAP, HDBSCAN, Sentence-Transformers).
 
 # Acknowledgements
-
-This work was funded by the Be.AI Leverhulme doctoral scholarship.
+We thank all the researchers who shared phenomenological datasets with us during development. Their data helped refine the tool and confirmed the need for accessible methods to analyse diverse phenomenological reports.
+RB is funded by the Be.AI Leverhulme doctoral scholarship. This project has received funding from the European Research Council (ERC) under the European Union’s Horizon 2020 research and innovation programme (grant agreement no.101019254, project CONSCIOUS) to AKS.
 
 # References

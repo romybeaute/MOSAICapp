@@ -12,10 +12,10 @@ authors:
   - name: Romy Beauté
     orcid: 0009-0006-4548-5349
     corresponding: true
-    affiliation: "1, 2, 3"
+    affiliation: "1, 2"
   - name: Guillaume Dumas
     orcid: 0000-0002-2253-1844
-    affiliation: "4, 5, 6, 7"
+    affiliation: "3, 4, 5, 6"
   - name: David Schwartzman
     orcid: 0000-0002-3779-396X
     affiliation: "1"
@@ -76,8 +76,9 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 
 
 ![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels.](MOSAICapp_interface1.png)
+\newpage
 
-<!-- ![Secondary view of the MOSAICapp user interface detailing extended functional parameters.](MOSAICapp_interface2.png){ width=100% } -->
+![Secondary view of the MOSAICapp user interface detailing extended functional parameters.](MOSAICapp_interface2.png){ width=100% }
 
 MOSAICapp provides the following capabilities through its web interface:
 

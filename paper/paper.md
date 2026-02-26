@@ -60,7 +60,7 @@ MOSAICapp addresses these needs through sentence-level tokenisation that preserv
 
 # Software Design
 
-MOSAICapp is built with Streamlit, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure @fig:interface1). The architecture reflects several design decisions driven by the needs of phenomenological research:
+MOSAICapp is built with Streamlit, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure \ref{fig:interface1}). The architecture reflects several design decisions driven by the needs of phenomenological research:
 
 **Separation of embedding and clustering.** The pipeline caches embeddings separately from clustering results, enabling rapid parameter exploration. This matters because finding appropriate UMAP and HDBSCAN settings often requires iteration—users can adjust clustering parameters and re-run analysis in seconds without recomputing expensive embeddings.
 
@@ -73,12 +73,6 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 **Exposed parameters with guidance.** Rather than hiding complexity behind defaults, the interface exposes UMAP and HDBSCAN parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
 
 # Features
-
-
-![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels. \label{fig:interface1}](MOSAICapp_interface1.png)
-
-
-![Secondary view of the MOSAICapp user interface detailing extended functional parameters, and in particular, topic participation analysis. In this view, each point represents a discovered topic, plotted by total sentences (x-axis) against unique participants contributing to that topic (y-axis). The diagonal line indicates perfect diversity (one sentence per participant). Points near the line represent robust inter-subjective patterns shared across many participants; points falling below indicate topics dominated by detailed individual accounts. Colour encodes diversity ratio (green = high consensus, red = individual-driven) \label{fig:interface2}](MOSAICapp_interface2.png)
 
 MOSAICapp provides the following capabilities through its web interface:
 
@@ -99,6 +93,12 @@ MOSAICapp provides the following capabilities through its web interface:
 **Interactive visualisations.** Results include a 2D scatter plot using DataMapPlot with documents coloured by topic, topic size distributions, and participation charts.
 
 **Export and reproducibility.** Results can be downloaded as CSV (one row per topic or one row per sentence). Run history preserves full configurations for comparison across parameter settings.
+
+
+![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels. \label{fig:interface1}](MOSAICapp_interface1.png)
+
+
+![Secondary view of the MOSAICapp user interface detailing extended functional parameters, and in particular, topic participation analysis. In this view, each point represents a discovered topic, plotted by total sentences (x-axis) against unique participants contributing to that topic (y-axis). The diagonal line indicates perfect diversity (one sentence per participant). Points near the line represent robust inter-subjective patterns shared across many participants; points falling below indicate topics dominated by detailed individual accounts. Colour encodes diversity ratio (green = high consensus, red = individual-driven) \label{fig:interface2}](MOSAICapp_interface2.png)
 
 
 # Research Impact Statement

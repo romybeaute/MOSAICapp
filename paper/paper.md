@@ -1,5 +1,5 @@
 ---
-title: 'MOSAICapp: An Interactive Web Application for Topic Modelling of Phenomenological Reports'
+title: 'MOSAICapp: An Interactive Web Application for Topic Modelling and Interpretation of Phenomenological Reports'
 tags:
   - Python
   - topic modelling
@@ -45,16 +45,16 @@ MOSAICapp is a web application for topic modelling of phenomenological text data
 
 # Statement of Need
 
-Phenomenological research in consciousness science often relies on open-ended subjective reports to capture experiential dimensions that structured instruments may miss. Questionnaires such as the Altered States of Consciousness Rating Scale [@studerus2010psychometric] provide validated dimensional measures, but their predefined categories can constrain what researchers discover. Experiences that do not fit the existing structure are typically lost or reduced to "other" responses. Moreover, many studies do collect open-text reports alongside structured measures, yet without accessible tools for systematic analysis, especially for big dataset, these rich qualitative data can often remain unexplored—representing a significant untapped resource for understanding subjective experience.
+Phenomenological research in consciousness science often relies on open-ended subjective reports to capture experiential dimensions that structured instruments may miss. Questionnaires such as the Altered States of Consciousness Rating Scale [@studerus2010psychometric] provide validated dimensional measures, but their predefined categories can constrain what researchers discover. Experiences that do not fit the existing structure are typically lost or reduced to "other" responses. Moreover, many studies do collect open-text reports alongside structured measures, yet without accessible tools for systematic analysis, especially for big datasets, these rich qualitative data often remain unexplored.
 
-Qualitative coding of experiential reports typically requires researchers to iteratively read, annotate, and categorise text. This process is time-intensive, scaling poorly to large datasets—a single researcher can systematically code hundreds of reports, but thousands become impractical. It is also difficult to reproduce: different researchers may apply coding schemes inconsistently, and even the same researcher may drift in their interpretations over time, introducing subjective bias that is hard to quantify or control. Topic modelling offers a computational alternative: it discovers thematic structure directly from text without imposing categories in advance, scales to arbitrarily large datasets, and produces reproducible results given identical data and parameters. BERTopic [@grootendorst2022bertopic] is particularly suited for phenomenological language: its transformer-based embeddings capture semantic relationships that depend on subtle contextual cues, while density-based clustering (HDBSCAN; @campello2013density; @mcinnes2017hdbscan) and dimensionality reduction (UMAP; @mcinnes2018umap) identify structure without predefined categories.
+Qualitative coding of experiential reports typically requires researchers to iteratively read, annotate, and categorise text. This process is time-intensive, scaling poorly to large datasets. It is also difficult to reproduce, as different researchers may apply coding schemes inconsistently, and even the same researcher may drift in their interpretations over time, introducing subjective bias that is hard to quantify or control. Topic modelling offers a computational alternative, by releaving thematic structure directly from text without imposing categories in advance, scales to arbitrarily large datasets, and produces reproducible results given identical data and parameters. BERTopic [@grootendorst2022bertopic] is particularly suited for phenomenological language, because of its transformer-based embeddings that allows to capture semantic relationships that depend on subtle contextual cues, while density-based clustering (HDBSCAN; @campello2013density; @mcinnes2017hdbscan) and dimensionality reduction (UMAP; @mcinnes2018umap) identify structure without predefined categories.
 Beyond clustering, Large Language Models (LLMs) can generate interpretable topic labels grounded in phenomenological terminology, moving beyond keyword-based representations.
 
 However, using BERTopic and LLM integration requires programming expertise, which presents a barrier for researchers studying subjective experience who do not have a background in computer science. MOSAICapp integrates both capabilities into an accessible web interface (Figure \ref{fig:interface1}), enabling consciousness researchers, phenomenologists, and qualitative researchers to explore their text data computationally without writing code.
 
 # State of the Field
 
-Analysing phenomenological text data presents specific challenges that general-purpose topic modelling tools do not address. Single experience reports often contain multiple distinct themes—a participant might describe visual phenomena, emotional responses, and temporal distortions within the same narrative. Report-level analysis conflates these into a single topic assignment, losing thematic granularity. Additionally, researchers need to distinguish between robust inter-subjective patterns (themes shared across many participants) and idiosyncratic accounts (detailed descriptions from individual participants), a distinction that standard topic modelling outputs do not provide.
+Analysing phenomenological text data presents specific challenges that general-purpose topic modelling tools do not address. Single experience reports often contain multiple distinct themes. For instance, a participant might describe visual phenomena, emotional responses, and temporal distortions within the same narrative. Report-level analysis conflates these into a single topic assignment, losing thematic granularity. Additionally, researchers need to distinguish between robust inter-subjective patterns (themes shared across many participants) and idiosyncratic accounts (detailed descriptions from individual participants), a distinction that standard topic modelling outputs do not provide.
 
 MOSAICapp addresses these needs through sentence-level tokenisation that preserves fine-grained experiential themes, topic participation metrics that quantify how many unique participants contribute to each topic, and LLM-based labelling with phenomenologically-informed prompts that generate interpretable labels focused on modes of experience rather than content-specific descriptors. These features make the tool particularly suited for consciousness research, where the goal is often to identify invariant structures of experience across individuals.
 
@@ -62,37 +62,37 @@ MOSAICapp addresses these needs through sentence-level tokenisation that preserv
 
 MOSAICapp is built with Streamlit, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure \ref{fig:interface1}). The architecture reflects several design decisions driven by the needs of phenomenological research:
 
-**Separation of embedding and clustering.** The pipeline caches embeddings separately from clustering results, enabling rapid parameter exploration. This matters because finding appropriate UMAP and HDBSCAN settings often requires iteration—users can adjust clustering parameters and re-run analysis in seconds without recomputing expensive embeddings.
+**Separation of embedding and clustering:** The pipeline caches embeddings separately from clustering results, enabling rapid parameter exploration. This matters because finding appropriate UMAP and HDBSCAN settings often requires iteration. This allows users to adjust clustering parameters and re-run analysis in seconds without recomputing expensive embeddings.
 
-**Sentence-level analysis.** Unlike typical topic modelling workflows that treat each document as a unit, MOSAICapp supports sentence-level tokenisation. This addresses a specific challenge in phenomenological research: single experience reports often contain multiple distinct themes (e.g., visual phenomena, emotional responses, and temporal distortions in one narrative), and report-level analysis would conflate these into a single topic assignment.
+**Sentence-level analysis:** Unlike typical topic modelling workflows that treat each document as a unit, MOSAICapp supports sentence-level tokenisation. This addresses a specific challenge in phenomenological research: single experience reports often contain multiple distinct themes (e.g., visual phenomena, emotional responses, and temporal distortions in one narrative), and report-level analysis would conflate these into a single topic assignment.
 
-**Topic participation metrics.** Standard topic modelling outputs show topic size and keywords, but not whether a topic reflects shared experience or individual narrative. We added diversity ratio (unique participants / total sentences per topic) because phenomenological research often aims to identify invariant structures across individuals—this metric helps distinguish robust inter-subjective patterns from idiosyncratic accounts (Figure \ref{fig:interface2}).
+**Topic participation metrics:** Standard topic modelling outputs show topic size and keywords, but not whether a topic reflects shared experience or individual narrative. We added diversity ratio (unique participants / total sentences per topic) because phenomenological research often aims to identify invariant structures across individuals. This metric helps distinguish robust inter-subjective patterns from idiosyncratic accounts (Figure \ref{fig:interface2}).
 
-**Transparent LLM prompting.** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes rather than content labels, focusing on modes of experience rather than specific objects. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
+**Transparent LLM prompting:** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes rather than content labels, focusing on modes of experience rather than specific objects. For instance, if participants describe "a monster", "a shadowy figure", or "a threatening face", the label would be "Perceiving threatening entities" rather than a specific example from a single report that happens to dominate the keywords. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
 
-**Exposed parameters with guidance.** Rather than hiding complexity behind defaults, the interface exposes UMAP and HDBSCAN parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
+**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, the interface exposes UMAP and HDBSCAN parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
 
 # Features
 
 MOSAICapp provides the following capabilities through its web interface:
 
-**Data input and preprocessing.** Users upload CSV files with automatic encoding detection (UTF-8, mac_roman, cp1252, ISO-8859-1), select the text column to analyse, choose between report-level or sentence-level analysis (using NLTK tokenisation; @bird2009natural), filter units shorter than a configurable word threshold, and subsample data for rapid parameter exploration.
+**Data input and preprocessing:** Users upload CSV files with automatic encoding detection (UTF-8, mac_roman, cp1252, ISO-8859-1), select the text column to analyse, choose between report-level or sentence-level analysis (using NLTK tokenisation; @bird2009natural), filter units shorter than a configurable word threshold, and subsample data for rapid parameter exploration.
 
-**Embedding model selection.** Multiple transformer models are available, including multilingual options, with GPU or CPU processing. The interface links to the MTEB Leaderboard for informed model selection.
+**Embedding model selection:** Multiple transformer models are available, including multilingual options, with GPU or CPU processing. The interface links to the MTEB Leaderboard for informed model selection.
 
-**Clustering configuration.** The interface exposes UMAP parameters (n_neighbors, n_components, min_dist), HDBSCAN parameters (min_cluster_size, min_samples), and vectorizer settings (n-gram range, minimum document frequency, standard and custom stopwords). A parameter guide explains the effect of each setting.
+**Clustering configuration:** The interface exposes UMAP parameters (n_neighbors, n_components, min_dist), HDBSCAN parameters (min_cluster_size, min_samples), and vectorizer settings (n-gram range, minimum document frequency, standard and custom stopwords). A parameter guide explains the effect of each setting.
 
-**Outlier reduction.** Users can apply BERTopic's outlier reduction strategies (embedding-based or c-TF-IDF-based) with configurable similarity thresholds to reassign unclassified documents.
+**Outlier reduction:** Users can apply BERTopic's outlier reduction strategies (embedding-based or c-TF-IDF-based) with configurable similarity thresholds to reassign unclassified documents.
 
-**LLM-based topic labelling.** Integration with the Hugging Face Inference API generates interpretable topic labels using phenomenologically-informed prompts. The system prompt and user template are displayed for transparency, and labels are cached.
+**LLM-based topic labelling:** Integration with the Hugging Face Inference API generates interpretable topic labels using phenomenologically-informed prompts. The system prompt and user template are displayed for transparency, and labels are cached.
 
-**Quality metrics.** Topic coherence (C_v) computed via Gensim [@rehurek2010gensim] and embedding coherence (average cosine similarity of top words) help evaluate model quality.
+**Quality metrics:** Topic coherence (C_v) computed via Gensim [@rehurek2010gensim] and embedding coherence (average cosine similarity of top words) help evaluate model quality.
 
-**Topic participation analysis.** A diversity ratio (unique participants per topic) and interactive visualisation distinguish shared phenomenological structures from idiosyncratic individual accounts. Users can filter topics by minimum participant count.
+**Topic participation analysis:** A diversity ratio (unique participants per topic) and interactive visualisation distinguish shared phenomenological structures from idiosyncratic individual accounts. Users can filter topics by minimum participant count.
 
-**Interactive visualisations.** Results include a 2D scatter plot using DataMapPlot with documents coloured by topic, topic size distributions, and participation charts.
+**Interactive visualisations:** Results include a 2D scatter plot using DataMapPlot with documents coloured by topic, topic size distributions, and participation charts.
 
-**Export and reproducibility.** Results can be downloaded as CSV (one row per topic or one row per sentence). Run history preserves full configurations for comparison across parameter settings.
+**Export and reproducibility:** Results can be downloaded as CSV (one row per topic or one row per sentence). Run history preserves full configurations for comparison across parameter settings.
 
 
 ![MOSAICapp interface showing analysis of Dreamachine phenomenological reports. The sidebar displays configurable parameters for preprocessing, embedding models, UMAP, and HDBSCAN. The main panel shows the experiential topic map with LLM-generated labels. \label{fig:interface1}](MOSAICapp_interface1.png)
@@ -105,11 +105,11 @@ MOSAICapp provides the following capabilities through its web interface:
 
 MOSAICapp has been used to analyse several phenomenological datasets, demonstrating its utility for consciousness research:
 
-**Stroboscopic phenomenology.** Analysis of 898 sentences from the Dreamachine project—a large-scale public study of stroboscopic light stimulation—identified 12 experiential clusters in the High Sensory condition and 7 in the Deep Listening condition. These included themes related to visual hallucinations, autobiographical memory recall, synesthetic experiences, and altered states of consciousness, extending beyond what traditional stroboscopic light research has typically measured [@beaute2025mosaic].
+**Stroboscopic phenomenology:** Analysis of 898 sentences from the Dreamachine project—a large-scale public study of stroboscopic light stimulation—identified 12 experiential clusters in the High Sensory condition and 7 in the Deep Listening condition. These included themes related to visual hallucinations, autobiographical memory recall, synesthetic experiences, and altered states of consciousness, extending beyond what traditional stroboscopic light research has typically measured [@beaute2025mosaic].
 
-**Minimal Phenomenal Experience.** The pipeline was applied to free-text descriptions of "pure awareness" states collected as part of the MPE study [@gamma2021mpe], enabling data-driven exploration of how participants describe these experiences in their own words.
+**Minimal Phenomenal Experience:** The pipeline was applied to free-text descriptions of "pure awareness" states collected as part of the MPE study [@gamma2021mpe], enabling data-driven exploration of how participants describe these experiences in their own words.
 
-**Psychedelic phenomenology.** The tool has been used to analyse micro-phenomenological interview transcripts from DMT and 5-MeO-DMT studies, identifying fine-grained experiential clusters in datasets containing several thousand sentences.
+**Psychedelic phenomenology:** The tool has been used to analyse micro-phenomenological interview transcripts from DMT and 5-MeO-DMT studies, identifying fine-grained experiential clusters in datasets containing several thousand sentences.
 
 The Hugging Face Space deployment has received usage from researchers without prior programming experience, demonstrating the tool's accessibility for its intended audience.
 

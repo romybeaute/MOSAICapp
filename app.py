@@ -1992,18 +1992,17 @@ else:
 
             top_docs_list = []
             unique_valid_topics = [t for t in set(tm.topics_) if t != -1]
+            SEP = " | "
 
             for t in unique_valid_topics:
                 reps = tm.get_representative_docs(t)
                 if reps:
                     topic_label = filtered_llm_names.get(t, f"Topic {t}")
-                    for rank, doc in enumerate(reps[:10], start=1):
-                        top_docs_list.append({
-                            "Topic": t,
-                            "Topic Name": topic_label,
-                            "Relevance Rank": rank,
-                            "Sentence": doc
-                        })
+                    top_docs_list.append({
+                        "Topic": t,
+                        "Topic Name": topic_label,
+                        "Sentences": SEP.join(map(str, reps[:10]))
+                    })
 
             if top_docs_list:
                 df_top_docs = pd.DataFrame(top_docs_list)

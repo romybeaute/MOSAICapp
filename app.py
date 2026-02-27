@@ -644,9 +644,7 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
         topics=topic_model.topic_representations_,
         nr_repr_docs=20  # Get up to 20 representative docs per topic (instead of default 3 
     )
-    topic_model.representative_docs_ = repr_docs
-
-
+    topic_model.representative_docs_ = repr_docs[0]
 
     info = topic_model.get_topic_info()
 

@@ -635,6 +635,19 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
     )
 
     topics, _ = topic_model.fit_transform(_docs, _embeddings)
+
+    # Override BERTopic's default 3 representative documents limit
+    doc_df = pd.DataFrame({"Document": _docs, "ID": range(len(_docs)), "Topic": topics})
+    repr_docs, _, _ = topic_model._extract_representative_docs(
+        c_tf_idf=topic_model.c_tf_idf_,
+        documents=doc_df,
+        topics=topic_model.topic_representations_,
+        nr_repr_docs=20  # Get up to 20 representative docs per topic (instead of default 3 
+    )
+    topic_model.representative_docs_ = repr_docs
+
+
+
     info = topic_model.get_topic_info()
 
     outlier_pct = 0
@@ -1615,9 +1628,9 @@ else:
             with cB:
                 max_docs_per_topic = st.slider(
                     "Docs per topic",
-                    min_value=2,
-                    max_value=40,
-                    value=8,
+                    min_value=3,
+                    max_value=20,
+                    value=5,
                     step=1,
                     help="How many representative sentences per topic to show the LLM. Try keeping low value to not spend all tokens",
                     key="llm_docs_per_topic",
@@ -1974,6 +1987,38 @@ else:
                 )
 
             st.dataframe(export_csv)
+
+
+
+            st.subheader("Representative Sentences Export")
+
+            top_docs_list = []
+            unique_valid_topics = [t for t in set(tm.topics_) if t != -1]
+
+            for t in unique_valid_topics:
+                reps = tm.get_representative_docs(t)
+                if reps:
+                    topic_label = filtered_llm_names.get(t, f"Topic {t}")
+                    for rank, doc in enumerate(reps[:10], start=1):
+                        top_docs_list.append({
+                            "Topic": t,
+                            "Topic Name": topic_label,
+                            "Relevance Rank": rank,
+                            "Sentence": doc
+                        })
+
+            if top_docs_list:
+                df_top_docs = pd.DataFrame(top_docs_list)
+                top_docs_csv_name = f"top_10_representative_sentences_{base}_{gran}.csv"
+
+                st.download_button(
+                    label="Download Top 10 Representative Sentences per Topic",
+                    data=df_top_docs.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=top_docs_csv_name,
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Extracts up to 10 most mathematically central sentences for each topic."
+                )
 
 
 

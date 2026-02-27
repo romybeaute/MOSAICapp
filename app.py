@@ -638,7 +638,7 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
 
     # Override BERTopic's default 3 representative documents limit
     doc_df = pd.DataFrame({"Document": _docs, "ID": range(len(_docs)), "Topic": topics})
-    repr_docs, _, _ = topic_model._extract_representative_docs(
+    repr_docs = topic_model._extract_representative_docs(
         c_tf_idf=topic_model.c_tf_idf_,
         documents=doc_df,
         topics=topic_model.topic_representations_,

@@ -13,27 +13,27 @@ authors:
     orcid: 0009-0006-4548-5349
     corresponding: true
     affiliation: "1, 2"
-  - name: Guillaume Dumas
-    orcid: 0000-0002-2253-1844
-    affiliation: "3, 4, 5, 6"
+  - name: Anil K. Seth
+    orcid: 0000-0002-1421-6051
+    affiliation: "1, 3"
   - name: David Schwartzman
     orcid: 0000-0002-3779-396X
     affiliation: "1"
-  - name: Anil K. Seth
-    orcid: 0000-0002-1421-6051
-    affiliation: "1, 6"
+  - name: Guillaume Dumas
+    orcid: 0000-0002-2253-1844
+    affiliation: "3, 4, 5, 6"
 affiliations:
   - name: Sussex Centre for Consciousness Science, University of Sussex, UK
     index: 1
   - name: Sussex AI, University of Sussex, UK
     index: 2
-  - name: CHU Sainte-Justine Azrieli Research Center, Montréal, Québec, Canada
+  - name: Program for Brain, Mind, and Consciousness, Canadian Institute for Advanced Research, Toronto, Ontario, Canada
     index: 3
   - name: Department of Psychiatry and Addictology, University of Montréal, Montréal, Québec, Canada
     index: 4
   - name: Mila – Quebec Artificial Intelligence Institute, Montréal, Québec, Canada
     index: 5
-  - name: Program for Brain, Mind, and Consciousness, Canadian Institute for Advanced Research, Toronto, Ontario, Canada
+  - name: CHU Sainte-Justine Azrieli Research Center, Montréal, Québec, Canada
     index: 6
 date: 18 February 2026
 bibliography: paper.bib

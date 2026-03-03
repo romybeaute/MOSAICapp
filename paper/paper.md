@@ -58,6 +58,9 @@ Analysing phenomenological text data presents specific challenges that general-p
 
 MOSAICapp addresses these needs through sentence-level tokenisation that preserves fine-grained experiential themes, topic participation metrics that quantify how many unique participants contribute to each topic, and LLM-based labelling with phenomenologically-informed prompts that generate interpretable labels focused on modes of experience rather than content-specific descriptors, isolating the perceptual structure from the idiosynchratic content. These features make the tool particularly suited for consciousness research, where the goal is often to identify invariant structures of experience across individuals.
 
+While MOSAICapp was designed to support phenomenological research—deploying sentence-level tokenisation, topic participation metrics, and structurally focused LLM prompts—its transparent, configurable pipeline parameters permit rapid adaptation to diverse text datasets. This architecture enables the extraction of fine-grained thematic structures across broader domains, such as clinical narratives, interview transcripts, and large-scale survey responses.
+
+
 # Software Design
 
 MOSAICapp is built with Streamlit, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure \ref{fig:interface1}). The architecture reflects several design decisions driven by the needs of phenomenological research:

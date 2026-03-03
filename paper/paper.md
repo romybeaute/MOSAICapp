@@ -52,13 +52,13 @@ Beyond clustering, Large Language Models (LLMs) can generate interpretable topic
 
 However, using BERTopic and LLM integration requires programming expertise, which presents a barrier for researchers studying subjective experience who do not have a background in computer science. MOSAICapp integrates both capabilities into an accessible web interface (Figure \ref{fig:interface1}), enabling consciousness researchers, phenomenologists, and qualitative researchers to explore their text data computationally without writing code.
 
+While MOSAICapp was designed to support phenomenological research (e.g. deploying sentence-level tokenisation, topic participation metrics, and structurally focused LLM prompts) its interactive web interface and explicitly configurable parameters permit rapid and easy adaptation to diverse text datasets. This accessible architecture enables the extraction of fine-grained thematic structures across broader domains, such as clinical narratives, interview transcripts, and large-scale survey responses.
+
 # State of the Field
 
 Analysing phenomenological text data presents specific challenges that general-purpose topic modelling tools do not address. Single experience reports often contain multiple distinct themes. For instance, a participant might describe visual phenomena, emotional responses, and temporal distortions within the same narrative. Report-level analysis conflates these into a single topic assignment, losing thematic granularity. Additionally, researchers need to distinguish between robust inter-subjective patterns (themes shared across many participants) and idiosyncratic accounts (detailed descriptions from individual participants), a distinction that standard topic modelling outputs do not provide.
 
 MOSAICapp addresses these needs through sentence-level tokenisation that preserves fine-grained experiential themes, topic participation metrics that quantify how many unique participants contribute to each topic, and LLM-based labelling with phenomenologically-informed prompts that generate interpretable labels focused on modes of experience rather than content-specific descriptors, isolating the perceptual structure from the idiosynchratic content. These features make the tool particularly suited for consciousness research, where the goal is often to identify invariant structures of experience across individuals.
-
-While MOSAICapp was designed to support phenomenological research (e.g. deploying sentence-level tokenisation, topic participation metrics, and structurally focused LLM prompts) its interactive web interface and explicitly configurable parameters permit rapid and easy adaptation to diverse text datasets. This accessible architecture enables the extraction of fine-grained thematic structures across broader domains, such as clinical narratives, interview transcripts, and large-scale survey responses.
 
 # Software Design
 

@@ -88,11 +88,11 @@ MOSAICapp provides the following capabilities through its web interface:
 
 **LLM-based topic labelling:** Integration with the Hugging Face Inference API generates interpretable topic labels using phenomenologically-informed prompts. The system prompt and user template are displayed for transparency, and labels are cached.
 
-**Quality metrics:** Two complementary metrics help evaluate model quality. Topic coherence (C_v), computed via Gensim [@rehurek2010gensim], assesses the meaningfulness of word-level relationships among each topic's top terms using normalised pointwise mutual information and word co-occurrence statistics. Embedding coherence (C_embed) measures the average intra-topic cosine similarity of sentence embeddings, directly evaluating the semantic compactness of each topic cluster in the embedding space. Both metrics are described in detail in [@beaute2025mosaic].
+**Quality metrics:** Two complementary metrics help evaluate model quality. Topic coherence (C_v), computed via Gensim [@rehurek2010gensim], assesses word-level relationships among each topic's top terms using normalised pointwise mutual information and co-occurrence statistics. Embedding coherence (C_embed) measures the average intra-topic cosine similarity of sentence embeddings, evaluating semantic compactness of topic clusters. Both metrics are described in [@beaute2025mosaic].
 
-**Topic participation analysis:** A diversity ratio (unique participants per topic) and interactive visualisation distinguish shared phenomenological structures from idiosyncratic individual accounts. Users can filter topics by minimum participant count.
+**Topic participation analysis:** A diversity ratio (unique participants per topic) distinguish shared phenomenological structures from idiosyncratic accounts. Users can filter topics by minimum participant count.
 
-**Interactive visualisations:** Results include a 2D scatter plot using DataMapPlot with documents coloured by topic, topic size distributions, and participation charts.
+**Interactive visualisations:** Results include a 2D scatter plot via DataMapPlot with documents coloured by topic, topic size distributions, and participation charts.
 
 **Export and reproducibility:** Results can be downloaded as CSV (one row per topic or one row per sentence). Run history preserves full configurations for comparison across parameter settings.
 

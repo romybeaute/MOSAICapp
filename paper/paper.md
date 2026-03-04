@@ -72,7 +72,7 @@ The underlying analysis logic is encapsulated in a standalone Python library (mo
 
 **Transparent LLM prompting:** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes focused on modes of experience rather than specific objects. For instance, a topic characterised by descriptions such as "a monster", "a threatening face" would be labelled "Perceiving threatening entities" rather than defaulting to a  keyword like "monsters" that happens to dominate the keywords. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
 
-**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, MOSAICapp exposes key parameters with explanations of their effects to support methodological transparency and allow researchers to make informed choices about the trade-off between topic granularity and stability.
+**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, MOSAICapp exposes key parameters with explanations of their effects to support methodological transparency and allow researchers to make informed choices throughout the pipeline, for instance about the trade-off between topic granularity and stability.
 
 # Features
 

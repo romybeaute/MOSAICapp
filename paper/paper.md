@@ -70,9 +70,9 @@ The underlying analysis logic is encapsulated in a standalone Python library (mo
 
 **Topic participation metrics:** Standard topic modelling outputs show topic size and keywords, but not whether a topic reflects shared experience or individual narrative. We added diversity ratio (unique participants / total sentences per topic) because phenomenological research often aims to identify invariant structures across individuals. This metric helps distinguish robust inter-subjective patterns from idiosyncratic accounts (Figure \ref{fig:interface2}).
 
-**Transparent LLM prompting:** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes rather than content labels, focusing on modes of experience rather than specific objects. For instance, if participants describe "a monster", "a shadowy figure", or "a threatening face", the label would be "Perceiving threatening entities" rather than a specific example from a single report that happens to dominate the keywords. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
+**Transparent LLM prompting:** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes focused on modes of experience rather than specific objects. For instance, a topic characterised by descriptions such as "a monster", "a threatening face" would be labelled "Perceiving threatening entities" rather than defaulting to a  keyword like "monsters" that happens to dominate the keywords. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
 
-**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, the interface exposes key parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
+**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, MOSAICapp exposes key parameters with explanations of their effects to support methodological transparency and allow researchers to make informed choices about the trade-off between topic granularity and stability.
 
 # Features
 

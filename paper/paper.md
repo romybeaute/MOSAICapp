@@ -52,7 +52,7 @@ Beyond clustering, Large Language Models (LLMs) can generate interpretable topic
 
 However, using BERTopic and LLM integration requires programming expertise, which presents a barrier for researchers studying subjective experience who do not have a background in computer science. MOSAICapp integrates both capabilities into an accessible web interface (Figure \ref{fig:interface1}), enabling consciousness researchers, phenomenologists, and qualitative researchers to explore their text data computationally without writing code.
 
-While MOSAICapp was designed to support phenomenological research (e.g. deploying sentence-level tokenisation, topic participation metrics, and structurally focused LLM prompts) its interactive web interface and explicitly configurable parameters permit rapid and easy adaptation to diverse text datasets. This accessible architecture enables the extraction of fine-grained thematic structures across broader domains, such as clinical narratives, interview transcripts, and large-scale survey responses.
+While MOSAICapp was designed to support phenomenological research (e.g. deploying sentence-level tokenisation, topic participation metrics, and structurally focused LLM prompts), its interactive web interface and explicitly configurable parameters permit rapid and easy adaptation to diverse text datasets across broader domains, such as clinical narratives, interview transcripts, and large-scale survey responses.
 
 # State of the Field
 
@@ -62,9 +62,9 @@ MOSAICapp addresses these needs through sentence-level tokenisation that preserv
 
 # Software Design
 
-MOSAICapp is built with Streamlit, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure \ref{fig:interface1}). The architecture reflects several design decisions driven by the needs of phenomenological research:
+The underlying analysis logic is encapsulated in a standalone Python library (mosaic_core) that can be used independently of the web interface for programmatic access and batch processing. MOSAICapp is built with Streamlit as a graphical layer on top of this library, chosen for its ability to create interactive web applications from Python scripts while maintaining compatibility with scientific computing libraries (Figure \ref{fig:interface1}). This separation also means that researchers running the application locally can modify the interface itself—for example, adding new visualisations or adjusting the LLM prompts—without altering the core pipeline. The architecture reflects several design decisions driven by the needs of phenomenological research:
 
-**Separation of embedding and clustering:** The pipeline caches embeddings separately from clustering results, enabling rapid parameter exploration. This matters because finding appropriate UMAP and HDBSCAN settings often requires iteration. This allows users to adjust clustering parameters and re-run analysis in seconds without recomputing expensive embeddings.
+**Separation of embedding and clustering:** The pipeline caches embeddings separately from clustering results, so users can adjust key parameters and re-run clustering in seconds without recomputing expensive embeddings.
 
 **Sentence-level analysis:** Unlike typical topic modelling workflows that treat each document as a unit, MOSAICapp supports sentence-level tokenisation. This addresses a specific challenge in phenomenological research: single experience reports often contain multiple distinct themes (e.g., visual phenomena, emotional responses, and temporal distortions in one narrative), and report-level analysis would conflate these into a single topic assignment.
 
@@ -72,7 +72,7 @@ MOSAICapp is built with Streamlit, chosen for its ability to create interactive 
 
 **Transparent LLM prompting:** The system prompt instructs the LLM to perform phenomenological reduction: identifying structural themes rather than content labels, focusing on modes of experience rather than specific objects. For instance, if participants describe "a monster", "a shadowy figure", or "a threatening face", the label would be "Perceiving threatening entities" rather than a specific example from a single report that happens to dominate the keywords. The prompts are displayed in the interface so researchers can understand and modify the labelling approach.
 
-**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, the interface exposes UMAP and HDBSCAN parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
+**Exposed parameters with guidance:** Rather than hiding complexity behind defaults, the interface exposes key parameters with explanations of their effects. This supports methodological transparency and allows researchers to make informed choices about the trade-off between topic granularity and stability.
 
 # Features
 

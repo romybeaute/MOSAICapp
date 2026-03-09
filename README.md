@@ -43,7 +43,8 @@ The easiest way to use MOSAICapp is via the hosted web interface. No coding or i
 
 **[Launch MOSAICapp on Hugging Face](https://huggingface.co/spaces/romybeaute/MOSAICapp)**
 
-If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.
+If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.\
+
 *Note: The hosted version runs on shared resources. For large datasets or privacy-sensitive data, we recommend the local installation below.*
 
 

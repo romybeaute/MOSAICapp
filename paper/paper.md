@@ -16,9 +16,6 @@ authors:
   - name: Anil K. Seth
     orcid: 0000-0002-1421-6051
     affiliation: "1, 3"
-  - name: David Schwartzman
-    orcid: 0000-0002-3779-396X
-    affiliation: "1"
   - name: Guillaume Dumas
     orcid: 0000-0002-2253-1844
     affiliation: "3, 4, 5, 6"

@@ -15,6 +15,8 @@ A web application for topic modelling of phenomenological reports using BERTopic
 
 **Web app:** [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)
 
+If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.
+
 ## Statement of Need
 
 Consciousness research increasingly relies on open-ended subjective reports to capture the richness of lived experience. Structured questionnaires like the Altered States of Consciousness scales or the MEQ impose predefined categories that can miss unexpected experiential dimensions.
@@ -82,6 +84,11 @@ python -c "import nltk; nltk.download('punkt')"
 ```
 streamlit run app.py
 ```
+
+### Input format
+
+CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
+
 
 ### LLM Setup (Optional)
 To use the Automated Topic Labelling feature (Llama-3), you must provide a Hugging Face Access Token. The app uses this token to access the inference API.

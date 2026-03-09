@@ -35,7 +35,7 @@ The tool is designed for consciousness researchers, phenomenologists, and qualit
 
 ---
 
-## 1. Quick Start (No Installation)
+# Quick Start (No Installation)
 
 The easiest way to use MOSAICapp is via the hosted web interface. No coding or installation is required.
 
@@ -46,8 +46,8 @@ The easiest way to use MOSAICapp is via the hosted web interface. No coding or i
 
 ---
 
-## 2. Local Installation
-
+# Local Installation
+## 1. Steps for local installation
 Run the app on your own machine to use custom GPUs, process sensitive data locally, or modify the code.
 
 ### Prerequisites
@@ -75,7 +75,7 @@ python -c "import nltk; nltk.download('punkt')"
 
 ---
 
-## 3. Configuration & Running
+## 2. Configuration & Running
 
 
 ### Run the app
@@ -104,7 +104,7 @@ HF_TOKEN = "hf_..."
 
 ---
 
-## 4. Running Tests
+# Running Tests
 We include a test suite to verify the installation and core logic. This is useful to check if your environment is set up correctly.
 
 **Run everything:**
@@ -129,7 +129,7 @@ This will automatically load a dummy dataset included in the repo and verify:
 
 ---
 
-## 5. Python API (Advanced Usage)
+## Python API (Advanced Usage)
 MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
 
 ### Library usage

@@ -15,7 +15,7 @@ A web application for topic modelling of phenomenological reports using BERTopic
 
 **Web app:** [huggingface.co/spaces/romybeaute/MOSAICapp](https://huggingface.co/spaces/romybeaute/MOSAICapp)
 
-If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.
+
 
 ## Statement of Need
 
@@ -43,6 +43,7 @@ The easiest way to use MOSAICapp is via the hosted web interface. No coding or i
 
 **[Launch MOSAICapp on Hugging Face](https://huggingface.co/spaces/romybeaute/MOSAICapp)**
 
+If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.
 *Note: The hosted version runs on shared resources. For large datasets or privacy-sensitive data, we recommend the local installation below.*
 
 
@@ -111,7 +112,34 @@ HF_TOKEN = "hf_..."
 
 ---
 
-# Running Tests
+# Python API (Advanced Usage)
+MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
+
+## Library usage
+```python
+from mosaic_core.core_functions import preprocess_and_embed, run_topic_model
+
+# 1. Load and Preprocess
+docs, embeddings = preprocess_and_embed("data.csv", text_col="report")
+
+# 2. Configure Parameters
+config = {
+    "umap_params": {"n_neighbors": 15, "n_components": 5},
+    "hdbscan_params": {"min_cluster_size": 10},
+    "bt_params": {"nr_topics": "auto"}
+}
+
+# 3. Run Model
+model, reduced_embeddings, topics = run_topic_model(docs, embeddings, config)
+```
+
+
+### Input format
+
+CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
+
+
+## Running Tests
 We include a test suite to verify the installation and core logic. This is useful to check if your environment is set up correctly.
 
 **Run everything:**
@@ -133,37 +161,6 @@ This will automatically load a dummy dataset included in the repo and verify:
 - Topic modelling pipeline
 
 - Visualisation outputs
-
----
-
-## Python API (Advanced Usage)
-MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
-
-### Library usage
-```python
-from mosaic_core.core_functions import preprocess_and_embed, run_topic_model
-
-# 1. Load and Preprocess
-docs, embeddings = preprocess_and_embed("data.csv", text_col="report")
-
-# 2. Configure Parameters
-config = {
-    "umap_params": {"n_neighbors": 15, "n_components": 5},
-    "hdbscan_params": {"min_cluster_size": 10},
-    "bt_params": {"nr_topics": "auto"}
-}
-
-# 3. Run Model
-model, reduced_embeddings, topics = run_topic_model(docs, embeddings, config)
-```
-
-
-
-
-
-## Input format
-
-CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
 
 
 ---

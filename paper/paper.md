@@ -1,5 +1,5 @@
 ---
-title: 'MOSAICapp: An Interactive Tool for Computational Extraction of Experiential Topics from Phenomenological Reports'
+title: 'MOSAICapp: An Interactive Tool for Computational Mapping of Experiential Structure from Phenomenological Reports'
 tags:
   - Python
   - topic modelling
@@ -16,6 +16,8 @@ authors:
   - name: Anil K. Seth
     orcid: 0000-0002-1421-6051
     affiliation: "1, 3"
+  - name: David Schwartzman
+    affiliation: "1"
   - name: Guillaume Dumas
     orcid: 0000-0002-2253-1844
     affiliation: "3, 4, 5, 6"

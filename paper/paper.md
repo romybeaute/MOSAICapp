@@ -114,6 +114,8 @@ MOSAICapp has been used to analyse several phenomenological datasets, demonstrat
 
 The Hugging Face Space deployment has received usage from researchers without prior programming experience, demonstrating the tool's accessibility for its intended audience.
 
+We acknowledge that temporality is central to microphenomenological approaches, where the sequential unfolding of experience is itself analytically significant. While the pipeline does not explicitly model temporal structure, it is flexible enough to accommodate it through preprocessing choices — for instance, by segmenting reports into temporal phases and running separate analyses per phase.
+
 # AI Usage Disclosure
 
 Generative AI tools were used during the development of MOSAICapp. GitHub Copilot assisted with code completion and debugging during development of the Streamlit interface. All AI-assisted outputs were reviewed, validated, and edited by the human authors, who made all core design decisions and take full responsibility for the accuracy and originality of the submitted materials. No AI tools were used in the core algorithmic components, which rely on established libraries (BERTopic, UMAP, HDBSCAN, Sentence-Transformers).

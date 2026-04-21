@@ -2,7 +2,7 @@
 File: app.py
 Description: Streamlit app for advanced topic modeling on Innerspeech dataset
              with BERTopic, UMAP, HDBSCAN. (LLM features disabled for lite deployment)
-Last Modified: 25/02/2026
+Last Modified: 21/04/2026
 @corresp author: r.beaut@sussex.ac.uk
 """
 
@@ -223,9 +223,9 @@ st.title(
 st.markdown(
     """
     _If you use this tool in your research, please cite the following paper:_\n
-    **Beauté, R., et al. (2025).**  
+    **Beauté, R., et al. (2026).**  
     **Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC): Topic Modelling and LLM applied to Stroboscopic Phenomenology**  
-    https://arxiv.org/abs/2502.18318
+    https://doi.org/10.1093/nc/niag008
     """
 )
 
@@ -279,13 +279,27 @@ def save_run_snapshot(
     outlier_pct = (100.0 * outlier_count / n_units) if n_units else 0.0
 
 
+    # fig, _ = datamapplot.create_plot(
+    #     reduced,
+    #     labs,
+    #     noise_label="Unlabelled",
+    #     noise_color="#CCCCCC",
+    #     label_font_size=11,
+    #     arrowprops={"arrowstyle": "-", "color": "#333333"},
+    # )
+
     fig, _ = datamapplot.create_plot(
         reduced,
         labs,
         noise_label="Unlabelled",
         noise_color="#CCCCCC",
-        label_font_size=11,
-        arrowprops={"arrowstyle": "-", "color": "#333333"},
+        figsize=(24, 16),
+        dynamic_label_size=True,
+        dynamic_label_size_scaling_factor=0.5,
+        label_font_size=8,
+        label_wrap_width=10,
+        label_margin_factor=2.0,
+        arrowprops={"arrowstyle": "-", "color": "#333333"}
     )
     fig.suptitle(f"{dataset_title}: MOSAIC Topic Map", fontsize=16, y=0.99)
 
@@ -1753,21 +1767,54 @@ else:
             
             
             # VISUALISATION
-            st.subheader("Experiential Topics Visualisation")
+            # st.subheader("Experiential Topics Visualisation")
 
+            # dataset_title = ds_input.strip() or DATASET_DIR
+            # plot_title = f"{dataset_title}: MOSAIC's Experiential Topic Map"
+            
+            # fig, _ = datamapplot.create_plot(
+            #     reduced,
+            #     labs,
+            #     noise_label="Unlabelled",  
+            #     noise_color="#CCCCCC",     
+            #     label_font_size=11,        
+            #     arrowprops={"arrowstyle": "-", "color": "#333333"} 
+            # )
+            # fig.suptitle(plot_title, fontsize=16, y=0.99)
+            # st.pyplot(fig)
+            # VISUALISATION
+            st.subheader("Experiential Topics Visualisation")
+            
             dataset_title = ds_input.strip() or DATASET_DIR
             plot_title = f"{dataset_title}: MOSAIC's Experiential Topic Map"
             
             fig, _ = datamapplot.create_plot(
                 reduced,
                 labs,
-                noise_label="Unlabelled",  
-                noise_color="#CCCCCC",     
-                label_font_size=11,        
-                arrowprops={"arrowstyle": "-", "color": "#333333"} 
+                noise_label="Unlabelled",
+                noise_color="#CCCCCC",
+                figsize=(24, 16),
+                dynamic_label_size=True,
+                dynamic_label_size_scaling_factor=0.5,
+                label_font_size=8,
+                label_wrap_width=10,
+                label_margin_factor=2.0,
+                arrowprops={"arrowstyle": "-", "color": "#333333"}
             )
             fig.suptitle(plot_title, fontsize=16, y=0.99)
             st.pyplot(fig)
+            
+            # 2. Interactive BERTopic Plotly Integration
+            interactive_fig = tm.visualize_documents(
+                docs,
+                reduced_embeddings=reduced,
+                custom_labels=True,
+                hide_document_hover=False,
+                hide_annotations=False
+            )
+            st.plotly_chart(interactive_fig, use_container_width=True)
+
+            
 
 
 

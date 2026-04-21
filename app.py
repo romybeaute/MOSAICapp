@@ -293,12 +293,12 @@ def save_run_snapshot(
         labs,
         noise_label="Unlabelled",
         noise_color="#CCCCCC",
-        figsize=(24, 16),
+        figsize=(18, 18),
         dynamic_label_size=True,
-        dynamic_label_size_scaling_factor=0.5,
-        label_font_size=8,
-        label_wrap_width=10,
-        label_margin_factor=2.0,
+        dynamic_label_size_scaling_factor=0.85,
+        label_font_size=10,
+        label_wrap_width=15,
+        label_margin_factor=1.5,
         arrowprops={"arrowstyle": "-", "color": "#333333"}
     )
     fig.suptitle(f"{dataset_title}: MOSAIC Topic Map", fontsize=16, y=0.99)
@@ -1793,17 +1793,18 @@ else:
                 labs,
                 noise_label="Unlabelled",
                 noise_color="#CCCCCC",
-                figsize=(24, 16),
+                figsize=(18, 18),
                 dynamic_label_size=True,
-                dynamic_label_size_scaling_factor=0.5,
-                label_font_size=8,
-                label_wrap_width=10,
-                label_margin_factor=2.0,
+                dynamic_label_size_scaling_factor=0.85,
+                label_font_size=11,
+                label_wrap_width=15,
+                label_margin_factor=1.5,
                 arrowprops={"arrowstyle": "-", "color": "#333333"}
             )
             fig.suptitle(plot_title, fontsize=16, y=0.99)
             st.pyplot(fig)
-            
+
+            tm.set_topic_labels(llm_names)
             # 2. Interactive BERTopic Plotly Integration
             interactive_fig = tm.visualize_documents(
                 docs,

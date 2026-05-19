@@ -5,7 +5,8 @@
 #SBATCH --time=04:00:00
 #SBATCH --output=pipeline_%j.log
 
-module load cuda
-conda activate .venv  #(to change dependong on one's setup venv name)
+module load CUDA/12.1.1
+
+source .venv/bin/activate
 
 python run_pipeline.py

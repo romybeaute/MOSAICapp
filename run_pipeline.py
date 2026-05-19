@@ -14,6 +14,9 @@ import logging
 import re
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend for HPC (no display)
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -143,4 +146,66 @@ llm_cache.write_text(
 )
 
 log.info(f"Labelled {len(labels)} topics  →  {llm_cache}")
-log.info("Done. Open app.py and choose 'Use preprocessed CSV on server' to visualise.")
+
+# ── Step 4: Save plots ────────────────────────────────────────────────────────
+log.info("Step 4 — generating plots")
+
+PLOTS_DIR = PROJECT_ROOT / "outputs"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Build per-document label list (LLM label if available, else BERTopic name)
+topic_info = topic_model.get_topic_info()
+name_map = topic_info.set_index("Topic")["Name"].to_dict()
+doc_labels = [
+    labels.get(t, name_map.get(t, "Unlabelled")) if t != -1 else "Unlabelled"
+    for t in topics
+]
+
+# 1. Datamapplot — 2D topic map
+try:
+    import datamapplot
+    fig, _ = datamapplot.create_plot(
+        reduced_2d,
+        doc_labels,
+        noise_label="Unlabelled",
+        noise_color="#CCCCCC",
+        figsize=(18, 18),
+        dynamic_label_size=True,
+        dynamic_label_size_scaling_factor=0.85,
+        label_font_size=10,
+        label_wrap_width=15,
+        label_margin_factor=1.5,
+        arrowprops={"arrowstyle": "-", "color": "#333333"},
+    )
+    fig.suptitle(f"{DATASET_NAME}: MOSAIC Topic Map", fontsize=16, y=0.99)
+    topic_map_path = PLOTS_DIR / "topic_map.png"
+    fig.savefig(topic_map_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    log.info(f"Topic map  →  {topic_map_path}")
+except Exception as e:
+    log.warning(f"datamapplot failed: {e}")
+
+# 2. Bar chart — topic sizes
+info_no_outliers = topic_info[topic_info["Topic"] != -1].copy()
+info_no_outliers["Label"] = info_no_outliers["Topic"].map(
+    lambda t: labels.get(t, name_map.get(t, f"Topic {t}"))
+)
+info_no_outliers = info_no_outliers.sort_values("Count", ascending=True)
+
+fig, ax = plt.subplots(figsize=(10, max(6, len(info_no_outliers) * 0.35)))
+ax.barh(info_no_outliers["Label"], info_no_outliers["Count"], color="#4C72B0")
+ax.set_xlabel("Number of documents")
+ax.set_title(f"{DATASET_NAME}: Topic sizes ({n_topics} topics, {100*n_outliers/len(topics):.1f}% outliers)")
+plt.tight_layout()
+bar_path = PLOTS_DIR / "topic_sizes.png"
+fig.savefig(bar_path, dpi=200, bbox_inches="tight")
+plt.close(fig)
+log.info(f"Bar chart  →  {bar_path}")
+
+# 3. Topic info CSV — topics + LLM labels + sizes
+info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.get(t, ""))
+info_no_outliers.to_csv(PLOTS_DIR / "topic_info.csv", index=False)
+log.info(f"Topic info →  {PLOTS_DIR / 'topic_info.csv'}")
+
+log.info(f"Done. All outputs saved to {PLOTS_DIR}")
+log.info("To copy plots to your Mac: scp -r <cluster>:{PLOTS_DIR} .")

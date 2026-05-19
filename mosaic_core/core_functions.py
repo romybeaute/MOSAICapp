@@ -57,6 +57,29 @@ def slugify(s):
     return s or "DATASET"
 
 
+def get_cache_dir(project_root, dataset_name="MOSAIC"):
+    """Return the cache directory matching the Streamlit app's path convention."""
+    slug = slugify(dataset_name).upper()
+    return Path(project_root) / "data" / slug / "preprocessed" / "cache"
+
+
+def get_precomputed_filenames(cache_dir, csv_path, model_name,
+                               split_sentences=True, text_col=None, min_words=3):
+    """
+    Return (docs_file, embeddings_file) using the same naming convention as the
+    Streamlit app. Import this in run_pipeline.py so outputs are found automatically.
+    """
+    base = Path(csv_path).stem
+    safe_model = re.sub(r"[^a-zA-Z0-9_-]", "_", model_name)
+    suf = "sentences" if split_sentences else "reports"
+    col_suffix = f"_{re.sub(r'[^a-zA-Z0-9_-]', '_', text_col)}" if text_col else ""
+    mw_suffix = f"_minw{int(min_words or 0)}"
+    cache_dir = Path(cache_dir)
+    docs_file = cache_dir / f"precomputed_{base}{col_suffix}_{suf}{mw_suffix}_docs.json"
+    emb_file  = cache_dir / f"precomputed_{base}_{safe_model}{col_suffix}_{suf}{mw_suffix}_embeddings.npy"
+    return str(docs_file), str(emb_file)
+
+
 def clean_label(raw):
     """
     Normalise LLM-generated topic label.

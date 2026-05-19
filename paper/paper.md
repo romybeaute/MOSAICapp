@@ -1,5 +1,5 @@
 ---
-title: 'MOSAICapp: An Interactive Tool for Computational Extraction of Experiential Topics from Phenomenological Reports'
+title: 'MOSAICapp: An Interactive Tool for Computational Mapping of Experiential Structure from Phenomenological Reports'
 tags:
   - Python
   - topic modelling
@@ -16,6 +16,8 @@ authors:
   - name: Anil K. Seth
     orcid: 0000-0002-1421-6051
     affiliation: "1, 3"
+  - name: David Schwartzman
+    affiliation: "1"
   - name: Guillaume Dumas
     orcid: 0000-0002-2253-1844
     affiliation: "3, 4, 5, 6"
@@ -111,6 +113,8 @@ MOSAICapp has been used to analyse several phenomenological datasets, demonstrat
 **Psychedelic phenomenology:** The tool has been used to analyse micro-phenomenological interview transcripts from psychedelic studies, identifying fine-grained experiential clusters in datasets containing several thousand sentences.
 
 The Hugging Face Space deployment has received usage from researchers without prior programming experience, demonstrating the tool's accessibility for its intended audience.
+
+We acknowledge that temporality is central to microphenomenological approaches, where the sequential unfolding of experience is itself analytically significant. While the pipeline does not explicitly model temporal structure, it is flexible enough to accommodate it through preprocessing choices, such as, for instance, by segmenting reports into temporal phases and running separate analyses per phase.
 
 # AI Usage Disclosure
 

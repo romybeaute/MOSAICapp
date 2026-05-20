@@ -19,4 +19,5 @@ python run_optuna.py \
     --min-samples 5 30 \
     --n-neighbors 5 30 \
     --target-min 40 \
-    --target-max 110
+    --target-max 110 \
+    --subsample 15000

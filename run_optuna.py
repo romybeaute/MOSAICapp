@@ -121,7 +121,8 @@ class OptunaSearchBERTopic:
     def __init__(self, dataset, csv_path, embedding_model, text_col,
                  split_sentences, min_words, condition, n_trials,
                  target_min, target_max,
-                 mcs_min, mcs_max, ms_min, ms_max, nn_min, nn_max):
+                 mcs_min, mcs_max, ms_min, ms_max, nn_min, nn_max,
+                 subsample=None):
         self.dataset         = dataset
         self.csv_path        = csv_path
         self.embedding_model = embedding_model
@@ -132,6 +133,7 @@ class OptunaSearchBERTopic:
         self.n_trials        = n_trials
         self.target_min      = target_min
         self.target_max      = target_max
+        self.subsample       = subsample       # None = use all docs
         # search ranges (set via CLI — easy to adjust)
         self.mcs_min = mcs_min
         self.mcs_max = mcs_max
@@ -180,6 +182,15 @@ class OptunaSearchBERTopic:
         log.info("Loading embeddings → %s", self.emb_file)
         embeddings = np.load(self.emb_file).astype(np.float32)
         log.info("Loaded %d docs, embeddings %s", len(docs), embeddings.shape)
+
+        if self.subsample and self.subsample < len(docs):
+            rng = np.random.default_rng(RANDOM_SEED)
+            idx = rng.choice(len(docs), size=self.subsample, replace=False)
+            idx.sort()
+            docs = [docs[i] for i in idx]
+            embeddings = embeddings[idx]
+            log.info("Subsampled to %d docs for Optuna search (full data used in final pipeline)", len(docs))
+
         return docs, embeddings
 
     def _search_space(self, trial):
@@ -213,8 +224,12 @@ class OptunaSearchBERTopic:
         )
 
         try:
+            log.info("Trial %d | UMAP+HDBSCAN starting (mcs=%d ms=%d nn=%d)...",
+                     trial.number, params["min_cluster_size"], params["min_samples"], params["n_neighbors"])
             topics, _ = topic_model.fit_transform(self.docs, self.embeddings)
-        except Exception:
+            log.info("Trial %d | clustering done, computing coherence...", trial.number)
+        except Exception as e:
+            log.warning("Trial %d pruned: %s", trial.number, e)
             raise optuna.exceptions.TrialPruned()
 
         n_topics    = len([t for t in set(topics) if t != -1])
@@ -327,6 +342,10 @@ if __name__ == "__main__":
 
     # ── Search ────────────────────────────────────────────────────────────────
     parser.add_argument("--n_trials",        type=int, default=100)
+    parser.add_argument("--subsample",       type=int, default=15000,
+                        help="Number of docs to use per trial (None = all). "
+                             "Keeps each trial fast (~2 min) on CPU UMAP. "
+                             "Best params are then applied to full data in run_pipeline.py.")
 
     # Hyperparameter ranges — pass [min max] for each param
     parser.add_argument("--min-cluster-size", type=int, nargs=2, default=[10, 100],
@@ -368,5 +387,6 @@ if __name__ == "__main__":
         ms_max          = args.min_samples[1],
         nn_min          = args.n_neighbors[0],
         nn_max          = args.n_neighbors[1],
+        subsample       = args.subsample,
     )
     search.run()

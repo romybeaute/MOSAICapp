@@ -28,9 +28,11 @@ from gensim.models import CoherenceModel
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 try:
+    import cupy as cp
+    cp.cuda.runtime.getDeviceCount()  # raises if no CUDA driver
     from cuml.manifold import UMAP
     UMAP_BACKEND = "cuML (GPU)"
-except ImportError:
+except Exception:
     from umap import UMAP
     UMAP_BACKEND = "umap-learn (CPU)"
 

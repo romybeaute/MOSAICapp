@@ -4,8 +4,8 @@
 # title           : run_optuna.py
 # description     : Optuna multi-objective BERTopic search for MOSAICapp.
 #                   Loads precomputed embeddings — no re-embedding per trial.
-#                   Two objectives: embedding coherence + CV coherence.
-#                   Logs n_topics; filter results for target range [40-100].
+#                   Three objectives: embedding coherence, CV coherence, topic_score.
+#                   topic_score rewards n_topics in [target_min, target_max].
 # author          : Romy Beauté
 # usage           : python run_optuna.py --dataset NDE --text-col cleaned_report --n_trials 50
 #                   sbatch run_optuna.sh
@@ -248,19 +248,28 @@ class OptunaSearchBERTopic:
         emb_coh = compute_embedding_coherence(topic_model, self.docs, self.embeddings)
         cv_coh  = compute_cv_coherence(topic_model, self.docs)
 
+        # Third objective: reward being in [target_min, target_max]
+        # Score = 0→1 when below range, 1.0 inside range, 1→0 when above range
+        if n_topics < self.target_min:
+            topic_score = n_topics / self.target_min
+        elif n_topics <= self.target_max:
+            topic_score = 1.0
+        else:
+            topic_score = self.target_max / n_topics
+
         trial.set_user_attr("n_topics",     n_topics)
         trial.set_user_attr("outlier_pct",  round(outlier_pct, 1))
         trial.set_user_attr("cv_coherence", round(cv_coh, 4))
 
         log.info(
             "Trial %3d | mcs=%3d ms=%2d nn=%2d | topics=%3d outliers=%.1f%% "
-            "| emb_coh=%.4f cv_coh=%.4f",
+            "| emb_coh=%.4f cv_coh=%.4f topic_score=%.3f",
             trial.number,
             params["min_cluster_size"], params["min_samples"], params["n_neighbors"],
-            n_topics, outlier_pct, emb_coh, cv_coh,
+            n_topics, outlier_pct, emb_coh, cv_coh, topic_score,
         )
 
-        return emb_coh, cv_coh
+        return emb_coh, cv_coh, topic_score
 
     def save_callback(self, study, trial):
         if trial.state != optuna.trial.TrialState.COMPLETE:
@@ -269,6 +278,7 @@ class OptunaSearchBERTopic:
             "trial":            trial.number,
             "emb_coherence":    trial.values[0],
             "cv_coherence":     trial.values[1],
+            "topic_score":      trial.values[2],
             "n_topics":         trial.user_attrs.get("n_topics", ""),
             "outlier_pct":      trial.user_attrs.get("outlier_pct", ""),
             "min_cluster_size": trial.params["min_cluster_size"],
@@ -297,7 +307,7 @@ class OptunaSearchBERTopic:
                 study_name=study_name,
                 storage=storage_name,
                 sampler=NSGAIISampler(seed=RANDOM_SEED),
-                directions=["maximize", "maximize"],
+                directions=["maximize", "maximize", "maximize"],
             )
 
         study.optimize(self.objective, n_trials=self.n_trials, callbacks=[self.save_callback])
@@ -307,7 +317,7 @@ class OptunaSearchBERTopic:
 
         in_range = [
             t for t in study.best_trials
-            if self.target_min <= t.user_attrs.get("n_topics", 0) <= self.target_max
+            if t.values[2] == 1.0  # topic_score=1.0 means n_topics in [target_min, target_max]
         ]
         in_range.sort(key=lambda t: t.values[0], reverse=True)
 

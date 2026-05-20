@@ -56,8 +56,9 @@ TEXT_COLUMN_CANDIDATES = [
     "cleaned_text", "text", "report",
 ]
 
-UMAP_N_COMPONENTS = 5
-UMAP_MIN_DIST     = 0.0
+UMAP_NC_MIN   = 5
+UMAP_NC_MAX   = 15
+UMAP_MIN_DIST = 0.0
 TOP_N_WORDS       = 10
 RANDOM_SEED       = 42
 
@@ -207,6 +208,7 @@ class OptunaSearchBERTopic:
             "min_cluster_size": trial.suggest_int("min_cluster_size", self.mcs_min, self.mcs_max),
             "min_samples":      trial.suggest_int("min_samples",      self.ms_min,  self.ms_max),
             "n_neighbors":      trial.suggest_int("n_neighbors",      self.nn_min,  self.nn_max),
+            "n_components":     trial.suggest_int("n_components",     UMAP_NC_MIN,  UMAP_NC_MAX),
         }
 
     def objective(self, trial):
@@ -215,7 +217,7 @@ class OptunaSearchBERTopic:
         topic_model = BERTopic(
             umap_model=UMAP(
                 n_neighbors=params["n_neighbors"],
-                n_components=UMAP_N_COMPONENTS,
+                n_components=params["n_components"],
                 min_dist=UMAP_MIN_DIST,
                 metric="cosine",
                 random_state=RANDOM_SEED,
@@ -233,10 +235,11 @@ class OptunaSearchBERTopic:
         )
 
         try:
-            log.info("Trial %d | UMAP+HDBSCAN starting (mcs=%d ms=%d nn=%d)...",
-                     trial.number, params["min_cluster_size"], params["min_samples"], params["n_neighbors"])
+            log.info("Trial %d | UMAP+HDBSCAN starting (mcs=%d ms=%d nn=%d nc=%d)...",
+                     trial.number, params["min_cluster_size"], params["min_samples"],
+                     params["n_neighbors"], params["n_components"])
             topics, _ = topic_model.fit_transform(self.docs, self.embeddings)
-            log.info("Trial %d | clustering done, computing coherence...", trial.number)
+            log.info("Trial %d | clustering done, computing embedding coherence...", trial.number)
         except Exception as e:
             log.warning("Trial %d pruned: %s", trial.number, e)
             raise optuna.exceptions.TrialPruned()
@@ -246,9 +249,8 @@ class OptunaSearchBERTopic:
         outlier_pct = 100 * n_outliers / len(topics)
 
         emb_coh = compute_embedding_coherence(topic_model, self.docs, self.embeddings)
-        cv_coh  = compute_cv_coherence(topic_model, self.docs)
 
-        # Third objective: reward being in [target_min, target_max]
+        # Second objective: reward being in [target_min, target_max]
         # Score = 0→1 when below range, 1.0 inside range, 1→0 when above range
         if n_topics < self.target_min:
             topic_score = n_topics / self.target_min
@@ -257,19 +259,19 @@ class OptunaSearchBERTopic:
         else:
             topic_score = self.target_max / n_topics
 
-        trial.set_user_attr("n_topics",     n_topics)
-        trial.set_user_attr("outlier_pct",  round(outlier_pct, 1))
-        trial.set_user_attr("cv_coherence", round(cv_coh, 4))
+        trial.set_user_attr("n_topics",    n_topics)
+        trial.set_user_attr("outlier_pct", round(outlier_pct, 1))
 
         log.info(
-            "Trial %3d | mcs=%3d ms=%2d nn=%2d | topics=%3d outliers=%.1f%% "
-            "| emb_coh=%.4f cv_coh=%.4f topic_score=%.3f",
+            "Trial %3d | mcs=%3d ms=%2d nn=%2d nc=%2d | topics=%3d outliers=%.1f%% "
+            "| emb_coh=%.4f topic_score=%.3f",
             trial.number,
-            params["min_cluster_size"], params["min_samples"], params["n_neighbors"],
-            n_topics, outlier_pct, emb_coh, cv_coh, topic_score,
+            params["min_cluster_size"], params["min_samples"],
+            params["n_neighbors"], params["n_components"],
+            n_topics, outlier_pct, emb_coh, topic_score,
         )
 
-        return emb_coh, cv_coh, topic_score
+        return emb_coh, topic_score
 
     def save_callback(self, study, trial):
         if trial.state != optuna.trial.TrialState.COMPLETE:
@@ -277,8 +279,7 @@ class OptunaSearchBERTopic:
         row = {
             "trial":            trial.number,
             "emb_coherence":    trial.values[0],
-            "cv_coherence":     trial.values[1],
-            "topic_score":      trial.values[2],
+            "topic_score":      trial.values[1],
             "n_topics":         trial.user_attrs.get("n_topics", ""),
             "outlier_pct":      trial.user_attrs.get("outlier_pct", ""),
             "min_cluster_size": trial.params["min_cluster_size"],
@@ -307,7 +308,7 @@ class OptunaSearchBERTopic:
                 study_name=study_name,
                 storage=storage_name,
                 sampler=NSGAIISampler(seed=RANDOM_SEED),
-                directions=["maximize", "maximize", "maximize"],
+                directions=["maximize", "maximize"],
             )
 
         study.optimize(self.objective, n_trials=self.n_trials, callbacks=[self.save_callback])
@@ -317,15 +318,15 @@ class OptunaSearchBERTopic:
 
         in_range = [
             t for t in study.best_trials
-            if t.values[2] == 1.0  # topic_score=1.0 means n_topics in [target_min, target_max]
+            if t.values[1] == 1.0  # topic_score=1.0 means n_topics in [target_min, target_max]
         ]
         in_range.sort(key=lambda t: t.values[0], reverse=True)
 
         if in_range:
             for t in in_range[:5]:
                 log.info(
-                    "  Trial %d | emb_coh=%.4f cv_coh=%.4f | topics=%d outliers=%.1f%% | %s",
-                    t.number, t.values[0], t.values[1],
+                    "  Trial %d | emb_coh=%.4f | topics=%d outliers=%.1f%% | %s",
+                    t.number, t.values[0],
                     t.user_attrs["n_topics"], t.user_attrs["outlier_pct"], t.params,
                 )
         else:

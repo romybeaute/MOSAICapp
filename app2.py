@@ -1236,6 +1236,262 @@ if st.sidebar.button(
 st.sidebar.markdown("---")
 
 # =====================================================================
+# 8a. Module-level constants and reusable UI helpers
+# =====================================================================
+
+_ZS_DEFAULT_CATEGORIES = """\
+Time, Effort and Desire
+Peace, Bliss and Silence
+Self-Knowledge, Autonomous Cognizance and Insight
+Wakeful Presence
+Pure Awareness in Dream and Sleep
+Luminosity
+Thoughts and Feelings
+Emptiness and Non-egoic Self-awareness
+Sensory Perception in Body and Space
+Touching World and Self
+Mental Agency
+Witness Consciousness"""
+
+
+def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None:
+    """Render the full condition-comparison UI.
+    key_suffix keeps widget/session-state keys unique when rendered in multiple places.
+    """
+    _sim_key = f"cond_sim{key_suffix}"
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        cond_name_a = st.text_input("Condition A name", value="Condition A",
+                                    key=f"cond_name_a{key_suffix}")
+        cond_file_a = st.file_uploader(
+            "Topics summary CSV — Condition A", type=["csv"],
+            key=f"cond_file_a{key_suffix}",
+            help="The `topics_summary_*.csv` saved from the Main Results tab.",
+        )
+    with cc2:
+        cond_name_b = st.text_input("Condition B name", value="Condition B",
+                                    key=f"cond_name_b{key_suffix}")
+        cond_file_b = st.file_uploader(
+            "Topics summary CSV — Condition B", type=["csv"],
+            key=f"cond_file_b{key_suffix}",
+            help="The `topics_summary_*.csv` from the pipeline run on Condition B.",
+        )
+
+    sim_col, thresh_col = st.columns([1, 1])
+    with sim_col:
+        cond_threshold = st.slider(
+            "Match threshold (cosine similarity)",
+            min_value=0.50, max_value=0.99, value=0.85, step=0.01,
+            key=f"cond_thresh{key_suffix}",
+            help="Topic pairs with similarity above this value are considered 'shared'.",
+        )
+    with thresh_col:
+        st.info(
+            f"Embedding model: `{embedding_model}`  \n"
+            "Sentences in each topic CSV are embedded and averaged to a single topic vector, "
+            "then cosine similarity is computed pairwise."
+        )
+
+    run_cond = st.button(
+        "Run Comparison", type="primary",
+        key=f"cond_run_btn{key_suffix}",
+        disabled=(cond_file_a is None or cond_file_b is None),
+    )
+    if cond_file_a is None or cond_file_b is None:
+        st.info("Upload a CSV for both conditions to enable the comparison.")
+
+    if run_cond and cond_file_a and cond_file_b:
+        try:
+            df_a = pd.read_csv(cond_file_a)
+            df_b = pd.read_csv(cond_file_b)
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
+            return
+        topics_a = _parse_condition_csv(df_a)
+        topics_b = _parse_condition_csv(df_b)
+        if not topics_a:
+            st.error("Could not find topics in Condition A CSV. "
+                     "Expected `topic_name` + `texts`, or `Topic Name` + `Document`.")
+            return
+        if not topics_b:
+            st.error("Could not find topics in Condition B CSV.")
+            return
+        total_sents = sum(len(v) for v in topics_a.values()) + sum(len(v) for v in topics_b.values())
+        with st.spinner(f"Embedding {total_sents} sentences and computing similarity…"):
+            sim_df, _, _ = compute_condition_similarity(topics_a, topics_b, embedding_model)
+        st.session_state[_sim_key] = {
+            "sim_df": sim_df, "topics_a": topics_a, "topics_b": topics_b,
+            "name_a": cond_name_a, "name_b": cond_name_b,
+        }
+
+    if _sim_key not in st.session_state:
+        return
+
+    cs = st.session_state[_sim_key]
+    sim_df: pd.DataFrame = cs["sim_df"]
+    topics_a: dict = cs["topics_a"]
+    topics_b: dict = cs["topics_b"]
+    name_a: str = cs["name_a"]
+    name_b: str = cs["name_b"]
+    threshold = cond_threshold
+
+    # ── Heatmap ──────────────────────────────────────────────────
+    st.subheader("Cosine Similarity Heatmap")
+    _ncols = len(sim_df.columns)
+    _nrows = len(sim_df)
+    fig_heat, ax_heat = plt.subplots(figsize=(max(7, _ncols * 1.4), max(5, _nrows * 1.0)))
+    fig_heat.patch.set_facecolor("white")
+    sns.heatmap(
+        sim_df, annot=True, fmt=".2f", cmap="RdYlGn",
+        vmin=0.5, vmax=1.0, linewidths=0.6, linecolor="#f0f0f0",
+        annot_kws={"size": 9, "weight": "bold"},
+        cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
+    )
+    ax_heat.collections[0].colorbar.set_label("Cosine similarity", fontsize=9, labelpad=8)
+    ax_heat.collections[0].colorbar.ax.tick_params(labelsize=8)
+    ax_heat.set_title(f"Semantic similarity: {name_a}  vs  {name_b}",
+                      fontsize=13, pad=14, color="#222222")
+    ax_heat.set_xlabel(name_b, fontsize=11, labelpad=10, color="#444444")
+    ax_heat.set_ylabel(name_a, fontsize=11, labelpad=10, color="#444444")
+    plt.xticks(rotation=35, ha="right", fontsize=8.5)
+    plt.yticks(rotation=0, fontsize=8.5)
+    plt.tight_layout(pad=1.5)
+    st.pyplot(fig_heat)
+    buf_heat = BytesIO()
+    fig_heat.savefig(buf_heat, format="png", dpi=200, bbox_inches="tight")
+    st.download_button("Download heatmap as PNG", data=buf_heat.getvalue(),
+                       file_name=f"similarity_heatmap_{name_a}_{name_b}.png", mime="image/png")
+    plt.close(fig_heat)
+
+    # ── Greedy matching ───────────────────────────────────────────
+    st.subheader(f"Matched topics (threshold ≥ {threshold:.2f})")
+    matrix_copy = sim_df.copy()
+    shared = []
+    unique_a = list(sim_df.index)
+    unique_b = list(sim_df.columns)
+    while True:
+        max_score = float(matrix_copy.max().max())
+        if max_score < threshold:
+            break
+        idx_a, idx_b = matrix_copy.stack().idxmax()
+        shared.append((idx_a, idx_b, max_score))
+        if idx_a in unique_a: unique_a.remove(idx_a)
+        if idx_b in unique_b: unique_b.remove(idx_b)
+        matrix_copy.loc[idx_a, :] = 0.0
+        matrix_copy.loc[:, idx_b] = 0.0
+
+    if shared:
+        shared_df = pd.DataFrame(shared, columns=[name_a, name_b, "cosine_similarity"])
+        shared_df = shared_df.sort_values("cosine_similarity", ascending=False).reset_index(drop=True)
+        st.success(f"Found **{len(shared)} shared topic pairs** above threshold {threshold:.2f}")
+        st.dataframe(shared_df, use_container_width=True)
+    else:
+        st.warning(f"No topic pairs found above threshold {threshold:.2f}. Try lowering the threshold.")
+
+    mc1, mc2 = st.columns(2)
+    with mc1:
+        st.markdown(f"**Unique to {name_a}** ({len(unique_a)} topics)")
+        for t in unique_a: st.markdown(f"- {t}")
+    with mc2:
+        st.markdown(f"**Unique to {name_b}** ({len(unique_b)} topics)")
+        for t in unique_b: st.markdown(f"- {t}")
+
+    # ── Frequency comparison ──────────────────────────────────────
+    st.subheader("Frequency comparison")
+    counts_a = {name: len(sents) for name, sents in topics_a.items()}
+    counts_b = {name: len(sents) for name, sents in topics_b.items()}
+    rows_ct = []
+    for a_name, b_name, score in sorted(shared, key=lambda x: -x[2]):
+        rows_ct.append({"theme": f"{a_name} / {b_name}", name_a: counts_a.get(a_name, 0),
+                        name_b: counts_b.get(b_name, 0), "type": "paired", "cosine": round(score, 3)})
+    for t in unique_a:
+        rows_ct.append({"theme": t, name_a: counts_a.get(t, 0), name_b: 0,
+                        "type": f"{name_a}-specific", "cosine": float("nan")})
+    for t in unique_b:
+        rows_ct.append({"theme": t, name_a: 0, name_b: counts_b.get(t, 0),
+                        "type": f"{name_b}-specific", "cosine": float("nan")})
+    ct_df = pd.DataFrame(rows_ct)
+    ct_df["total"] = ct_df[name_a] + ct_df[name_b]
+    ct_df = ct_df.sort_values("total", ascending=False).drop(columns="total").reset_index(drop=True)
+    st.dataframe(ct_df, use_container_width=True)
+
+    # Chi-squared test
+    counts_for_chi2 = ct_df[[name_a, name_b]].dropna()
+    if counts_for_chi2.shape[0] >= 2:
+        try:
+            chi2_stat, p_val, dof, _ = chi2_contingency(counts_for_chi2)
+            chi_col1, chi_col2, chi_col3 = st.columns(3)
+            chi_col1.metric("χ² statistic", f"{chi2_stat:.2f}")
+            chi_col2.metric("Degrees of freedom", dof)
+            chi_col3.metric("p-value", f"{p_val:.4f}")
+            if p_val < 0.05:
+                st.success(f"p = {p_val:.4f} < 0.05 — statistically significant difference "
+                           f"in topic distribution between {name_a} and {name_b}.")
+            else:
+                st.info(f"p = {p_val:.4f} ≥ 0.05 — no statistically significant difference detected.")
+        except ValueError as e:
+            st.warning(f"Chi-squared test could not be computed: {e}")
+
+    # Bar chart
+    st.subheader("Comparative frequency chart")
+    if not ct_df.empty:
+        pct_df = ct_df.copy()
+        total_a = pct_df[name_a].sum()
+        total_b = pct_df[name_b].sum()
+        pct_df[f"{name_a} %"] = (pct_df[name_a] / total_a * 100).round(1) if total_a else 0
+        pct_df[f"{name_b} %"] = (pct_df[name_b] / total_b * 100).round(1) if total_b else 0
+        sorted_themes = pct_df.sort_values(f"{name_a} %", ascending=False)["theme"].tolist()
+        formatted_labels = [t.replace(" / ", "\n") for t in sorted_themes]
+        plot_melt = pct_df.melt(id_vars="theme",
+                                value_vars=[f"{name_a} %", f"{name_b} %"],
+                                var_name="Condition", value_name="Percentage")
+        plot_melt["Condition"] = plot_melt["Condition"].str.replace(" %", "")
+        n_t = len(sorted_themes)
+        fig_bar, ax_bar = plt.subplots(figsize=(9, max(4.5, n_t * 0.50 + 1.4)))
+        fig_bar.patch.set_facecolor("white")
+        ax_bar.set_facecolor("#f8f9fa")
+        sns.barplot(data=plot_melt, y="theme", x="Percentage", hue="Condition",
+                    palette={name_a: "#5B7BE8", name_b: "#FF8C42"},
+                    order=sorted_themes, ax=ax_bar)
+        ax_bar.set_yticklabels(formatted_labels, fontsize=8.5, color="#333333")
+        ax_bar.set_title(f"Experiential theme frequencies: {name_a}  vs  {name_b}",
+                         fontsize=12, pad=14, color="#222222")
+        ax_bar.set_xlabel("% of sentences within condition", fontsize=10, color="#555555")
+        ax_bar.set_ylabel("")
+        ax_bar.tick_params(axis="x", labelsize=8, colors="#777777")
+        for spine in ("top", "right"): ax_bar.spines[spine].set_visible(False)
+        ax_bar.spines["left"].set_color("#cccccc")
+        ax_bar.spines["bottom"].set_color("#cccccc")
+        ax_bar.grid(axis="x", color="#e0e0e0", linewidth=0.8, zorder=0)
+        ax_bar.grid(axis="y", linestyle="", alpha=0)
+        ax_bar.set_axisbelow(True)
+        ax_bar.set_xlim(0, plot_melt["Percentage"].max() * 1.18)
+        for container in ax_bar.containers:
+            lbs = [f"{v:.1f}%" if v > 0 else "" for v in container.datavalues]
+            ax_bar.bar_label(container, labels=lbs, label_type="edge", fontsize=7.5,
+                             padding=3, color="#444444")
+        legend = ax_bar.legend(title="Condition", frameon=True, facecolor="white", edgecolor="#dddddd", fontsize=9)
+        legend.get_title().set_fontweight("bold")
+        legend.get_title().set_fontsize(9)
+        plt.tight_layout(pad=1.5)
+        st.pyplot(fig_bar)
+        buf_bar = BytesIO()
+        fig_bar.savefig(buf_bar, format="png", dpi=200, bbox_inches="tight")
+        plt.close(fig_bar)
+        dl1, dl2 = st.columns(2)
+        with dl1:
+            st.download_button("Download bar chart (PNG)", data=buf_bar.getvalue(),
+                               file_name=f"freq_comparison_{name_a}_{name_b}.png",
+                               mime="image/png", use_container_width=True)
+        with dl2:
+            st.download_button("Download contingency table (CSV)",
+                               data=ct_df.to_csv(index=False).encode("utf-8-sig"),
+                               file_name=f"contingency_{name_a}_{name_b}.csv",
+                               mime="text/csv", use_container_width=True)
+
+
+# =====================================================================
 # 8. Prepare Data OR Run Analysis
 # =====================================================================
 
@@ -1256,6 +1512,103 @@ if not os.path.exists(EMBEDDINGS_FILE):
             text_col=selected_text_column,
             min_words=min_words,
         )
+
+    st.divider()
+    st.markdown("**— or —**")
+
+    _showing_tools = st.session_state.get("show_precomputed_tools", False)
+    _toggle_label = (
+        "Hide analysis tools"
+        if _showing_tools
+        else "Skip pipeline — I'll upload precomputed files from a previous run"
+    )
+    if st.button(_toggle_label, key="skip_to_tools_btn"):
+        st.session_state["show_precomputed_tools"] = not _showing_tools
+        st.rerun()
+
+    if st.session_state.get("show_precomputed_tools"):
+        st.info(
+            "Upload files you exported from a previous pipeline run. "
+            "The embedding model selected in the sidebar will be used for any re-embedding steps."
+        )
+
+        sa_zs_tab, sa_cond_tab = st.tabs(["Zero-Shot Classification", "Condition Comparison"])
+
+        with sa_zs_tab:
+            st.subheader("Zero-Shot Topic Classification")
+            st.caption(
+                "Upload the `.npy` embeddings file and `.json` docs file saved by the pipeline "
+                "to classify documents into categories without re-running the full pipeline."
+            )
+
+            sa_npy = st.file_uploader("Embeddings file (.npy)", type=["npy"], key="sa_zs_npy")
+            sa_docs_json = st.file_uploader(
+                "Documents file (.json) — list of strings", type=["json"], key="sa_zs_docs"
+            )
+
+            sa_zs_categories_raw = st.text_area(
+                "Categories — one per line",
+                value=_ZS_DEFAULT_CATEGORIES,
+                height=220,
+                key="sa_zs_categories",
+            )
+            sa_zs_min_sim = st.slider(
+                "Minimum similarity threshold",
+                min_value=0.1, max_value=0.9, value=0.5, step=0.05,
+                key="sa_zs_thresh",
+                help="Documents with max category similarity below this value are left as 'Unclassified'.",
+            )
+
+            sa_run_zs = st.button(
+                "Run Zero-Shot Classification",
+                type="primary",
+                key="sa_zs_run_btn",
+                disabled=(sa_npy is None or sa_docs_json is None),
+            )
+            if sa_npy is None or sa_docs_json is None:
+                st.info("Upload both files above to enable classification.")
+
+            if sa_run_zs and sa_npy and sa_docs_json:
+                try:
+                    sa_embeddings = np.load(sa_npy)
+                    sa_docs_list = json.load(sa_docs_json)
+                except Exception as e:
+                    st.error(f"Could not load files: {e}")
+                    st.stop()
+                sa_categories = [c.strip() for c in sa_zs_categories_raw.strip().splitlines() if c.strip()]
+                if not sa_categories:
+                    st.error("Please enter at least one category.")
+                    st.stop()
+                with st.spinner("Running zero-shot classification…"):
+                    sa_zs_topics, sa_zs_topic_info, _ = run_zeroshot(
+                        sa_docs_list, sa_embeddings, tuple(sa_categories),
+                        sa_zs_min_sim, selected_embedding_model,
+                        dataset_key=f"standalone_{len(sa_docs_list)}",
+                    )
+                st.session_state["sa_zs_results"] = (sa_zs_topics, sa_zs_topic_info, sa_categories)
+
+            if "sa_zs_results" in st.session_state:
+                sa_zs_topics, sa_zs_topic_info, sa_categories = st.session_state["sa_zs_results"]
+                st.success(f"Classified into {sa_zs_topic_info['Topic'].nunique()} categories.")
+                st.dataframe(
+                    sa_zs_topic_info[["Topic", "Count", "Name"]].set_index("Topic"),
+                    use_container_width=True,
+                )
+
+        with sa_cond_tab:
+            st.subheader("Condition Comparison — Semantic Similarity")
+            with st.expander("How to use", expanded=True):
+                st.markdown(
+                    f"""
+Upload the `topics_summary_*.csv` files saved from previous pipeline runs (one per condition).
+
+**What the comparison does:**
+- Sentences in each topic CSV are re-embedded using `{selected_embedding_model}` (set in the sidebar)
+- Each topic becomes a mean vector; cosine similarity is computed pairwise across conditions
+- Results: heatmap, matched pairs, unique topics, contingency table, chi-squared test, frequency chart
+                    """
+                )
+            _condition_comparison_ui(selected_embedding_model, key_suffix="_sa")
 
 else:
     # Load cached data
@@ -2255,20 +2608,6 @@ else:
             "Uses the same preprocessed docs and embeddings as the main pipeline — no extra embedding step needed."
         )
 
-        _ZS_DEFAULT_CATEGORIES = """\
-Time, Effort and Desire
-Peace, Bliss and Silence
-Self-Knowledge, Autonomous Cognizance and Insight
-Wakeful Presence
-Pure Awareness in Dream and Sleep
-Luminosity
-Thoughts and Feelings
-Emptiness and Non-egoic Self-awareness
-Sensory Perception in Body and Space
-Touching World and Self
-Mental Agency
-Witness Consciousness"""
-
         zs_categories_raw = st.text_area(
             "Categories — one per line (edit freely)",
             value=_ZS_DEFAULT_CATEGORIES,
@@ -2357,16 +2696,51 @@ Witness Consciousness"""
 
             if not zs_plot_df.empty:
                 st.subheader("Distribution across categories")
-                fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.55)))
-                bars = ax_zs.barh(zs_plot_df["Name"], zs_plot_df["Count"], color="#4C72B0")
+                import matplotlib.cm as _cm
+                import matplotlib.colors as _mcolors
+
+                _norm = _mcolors.Normalize(
+                    vmin=zs_plot_df["Count"].min(),
+                    vmax=zs_plot_df["Count"].max(),
+                )
+                _cmap = _cm.get_cmap("Blues")
+                _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in zs_plot_df["Count"]]
+
+                fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.62)))
+                fig_zs.patch.set_facecolor("white")
+                ax_zs.set_facecolor("#f8f9fa")
+
+                bars = ax_zs.barh(
+                    zs_plot_df["Name"], zs_plot_df["Count"],
+                    color=_bar_colors, edgecolor="white", linewidth=0.8, height=0.65,
+                )
+                _max_count = zs_plot_df["Count"].max()
                 for bar in bars:
                     w = bar.get_width()
-                    ax_zs.text(w + 1, bar.get_y() + bar.get_height() / 2, str(int(w)),
-                               va="center", ha="left", fontsize=9)
-                ax_zs.set_xlabel("Number of documents")
-                ax_zs.set_xlim(0, zs_plot_df["Count"].max() * 1.12)
+                    ax_zs.text(
+                        w + _max_count * 0.015,
+                        bar.get_y() + bar.get_height() / 2,
+                        str(int(w)),
+                        va="center", ha="left", fontsize=9,
+                        color="#333333", fontweight="bold",
+                    )
+
+                for spine in ("top", "right"):
+                    ax_zs.spines[spine].set_visible(False)
+                ax_zs.spines["left"].set_color("#cccccc")
+                ax_zs.spines["bottom"].set_color("#cccccc")
+                ax_zs.set_xlabel("Number of sentences", fontsize=10, color="#555555")
+                ax_zs.tick_params(axis="y", labelsize=9, colors="#333333")
+                ax_zs.tick_params(axis="x", labelsize=8, colors="#777777")
+                ax_zs.set_xlim(0, _max_count * 1.15)
                 ax_zs.invert_yaxis()
-                plt.tight_layout()
+                ax_zs.grid(axis="x", color="#e0e0e0", linewidth=0.8, zorder=0)
+                ax_zs.set_axisbelow(True)
+                ax_zs.set_title(
+                    f"Zero-Shot Classification  ·  {classified_zs:,} / {total_zs:,} sentences classified",
+                    fontsize=11, color="#333333", pad=12,
+                )
+                plt.tight_layout(pad=1.5)
                 st.pyplot(fig_zs)
 
                 buf_zs = BytesIO()
@@ -2416,7 +2790,7 @@ Witness Consciousness"""
 
         with st.expander("How to use this tab — read first", expanded=True):
             st.markdown(
-                """
+                f"""
 **This tab compares the topics found in two different conditions** by measuring the semantic
 similarity between their topic vectors.
 
@@ -2429,313 +2803,15 @@ similarity between their topic vectors.
 5. Come back here and upload both saved files below
 
 **What the comparison does:**
-- All sentences in each topic are embedded using `{model}` (same model as the sidebar)
+- All sentences in each topic are embedded using `{selected_embedding_model}` (same model as the sidebar)
 - Each topic is represented by the **mean vector** of its sentences
 - **Cosine similarity** is computed between every pair of topics across conditions
 - A greedy algorithm finds the best-matching pairs above the threshold
 - Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test, and a frequency bar chart
-                """.format(model=selected_embedding_model)
+                """
             )
 
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            cond_name_a = st.text_input("Condition A name", value="Condition A", key="cond_name_a")
-            cond_file_a = st.file_uploader(
-                "Topics summary CSV — Condition A",
-                type=["csv"],
-                key="cond_file_a",
-                help="The `topics_summary_*.csv` saved from the Main Results tab after running the pipeline on Condition A.",
-            )
-        with cc2:
-            cond_name_b = st.text_input("Condition B name", value="Condition B", key="cond_name_b")
-            cond_file_b = st.file_uploader(
-                "Topics summary CSV — Condition B",
-                type=["csv"],
-                key="cond_file_b",
-                help="The `topics_summary_*.csv` saved from the Main Results tab after running the pipeline on Condition B.",
-            )
-
-        sim_col, thresh_col = st.columns([1, 1])
-        with sim_col:
-            cond_threshold = st.slider(
-                "Match threshold (cosine similarity)",
-                min_value=0.50,
-                max_value=0.99,
-                value=0.85,
-                step=0.01,
-                help="Pairs above this threshold are considered 'shared' topics. "
-                     "Lower = more lenient matching.",
-            )
-        with thresh_col:
-            st.info(
-                f"Embedding model: `{selected_embedding_model}`  \n"
-                "Sentences in each topic CSV are embedded and averaged to form a "
-                "single topic vector, then cosine similarity is computed pairwise."
-            )
-
-        run_cond = st.button(
-            "Run Comparison",
-            type="primary",
-            key="cond_run_btn",
-            disabled=(cond_file_a is None or cond_file_b is None),
-        )
-
-        if cond_file_a is None or cond_file_b is None:
-            st.info("Upload a CSV for both conditions to enable the comparison.")
-
-        if run_cond and cond_file_a and cond_file_b:
-            try:
-                df_a = pd.read_csv(cond_file_a)
-                df_b = pd.read_csv(cond_file_b)
-            except Exception as e:
-                st.error(f"Could not read CSV: {e}")
-                st.stop()
-
-            topics_a = _parse_condition_csv(df_a)
-            topics_b = _parse_condition_csv(df_b)
-
-            if not topics_a:
-                st.error(
-                    f"Could not find topics in the Condition A CSV. "
-                    "Expected columns `topic_name` + `texts`, or `Topic Name` + `Document`."
-                )
-                st.stop()
-            if not topics_b:
-                st.error("Could not find topics in the Condition B CSV.")
-                st.stop()
-
-            with st.spinner(
-                f"Embedding {sum(len(v) for v in topics_a.values()) + sum(len(v) for v in topics_b.values())} "
-                "sentences and computing similarity…"
-            ):
-                sim_df, _, _ = compute_condition_similarity(
-                    topics_a, topics_b, selected_embedding_model
-                )
-
-            st.session_state["cond_sim"] = {
-                "sim_df": sim_df,
-                "topics_a": topics_a,
-                "topics_b": topics_b,
-                "name_a": cond_name_a,
-                "name_b": cond_name_b,
-                "threshold": cond_threshold,
-            }
-
-        if "cond_sim" in st.session_state:
-            cs = st.session_state["cond_sim"]
-            sim_df: pd.DataFrame = cs["sim_df"]
-            topics_a: dict = cs["topics_a"]
-            topics_b: dict = cs["topics_b"]
-            name_a: str = cs["name_a"]
-            name_b: str = cs["name_b"]
-            # allow live threshold changes without re-running
-            threshold = cond_threshold
-
-            # ── Heatmap ──────────────────────────────────────────────────
-            st.subheader("Cosine Similarity Heatmap")
-            fig_heat, ax_heat = plt.subplots(
-                figsize=(max(6, len(sim_df.columns) * 1.2), max(4, len(sim_df) * 0.9))
-            )
-            sns.heatmap(
-                sim_df,
-                annot=True,
-                fmt=".2f",
-                cmap="viridis",
-                vmin=0.5,
-                vmax=1.0,
-                linewidths=0.4,
-                ax=ax_heat,
-            )
-            ax_heat.set_title(
-                f"Semantic similarity: {name_a} vs {name_b}", fontsize=13
-            )
-            ax_heat.set_xlabel(name_b, fontsize=11)
-            ax_heat.set_ylabel(name_a, fontsize=11)
-            plt.xticks(rotation=35, ha="right", fontsize=8)
-            plt.yticks(rotation=0, fontsize=8)
-            plt.tight_layout()
-            st.pyplot(fig_heat)
-
-            buf_heat = BytesIO()
-            fig_heat.savefig(buf_heat, format="png", dpi=200, bbox_inches="tight")
-            st.download_button(
-                "Download heatmap as PNG",
-                data=buf_heat.getvalue(),
-                file_name=f"similarity_heatmap_{name_a}_{name_b}.png",
-                mime="image/png",
-            )
-            plt.close(fig_heat)
-
-            # ── Greedy matching ───────────────────────────────────────────
-            st.subheader(f"Matched topics (threshold ≥ {threshold:.2f})")
-
-            matrix_copy = sim_df.copy()
-            shared = []
-            unique_a = list(sim_df.index)
-            unique_b = list(sim_df.columns)
-
-            while True:
-                max_score = float(matrix_copy.max().max())
-                if max_score < threshold:
-                    break
-                idx_a, idx_b = matrix_copy.stack().idxmax()
-                shared.append((idx_a, idx_b, max_score))
-                if idx_a in unique_a:
-                    unique_a.remove(idx_a)
-                if idx_b in unique_b:
-                    unique_b.remove(idx_b)
-                matrix_copy.loc[idx_a, :] = 0.0
-                matrix_copy.loc[:, idx_b] = 0.0
-
-            if shared:
-                shared_df = pd.DataFrame(shared, columns=[name_a, name_b, "cosine_similarity"])
-                shared_df = shared_df.sort_values("cosine_similarity", ascending=False).reset_index(drop=True)
-                st.success(f"Found **{len(shared)} shared topic pairs** above threshold {threshold:.2f}")
-                st.dataframe(shared_df, use_container_width=True)
-            else:
-                st.warning(f"No topic pairs found above threshold {threshold:.2f}. Try lowering the threshold.")
-
-            mc1, mc2 = st.columns(2)
-            with mc1:
-                st.markdown(f"**Unique to {name_a}** ({len(unique_a)} topics)")
-                for t in unique_a:
-                    st.markdown(f"- {t}")
-            with mc2:
-                st.markdown(f"**Unique to {name_b}** ({len(unique_b)} topics)")
-                for t in unique_b:
-                    st.markdown(f"- {t}")
-
-            # ── Counts and contingency table ──────────────────────────────
-            st.subheader("Frequency comparison")
-
-            counts_a = {name: len(sents) for name, sents in topics_a.items()}
-            counts_b = {name: len(sents) for name, sents in topics_b.items()}
-
-            rows_ct = []
-            matched_a = {a for a, _, _ in shared}
-            matched_b = {b for _, b, _ in shared}
-
-            for a_name, b_name, score in sorted(shared, key=lambda x: -x[2]):
-                rows_ct.append({
-                    "theme": f"{a_name} / {b_name}",
-                    name_a: counts_a.get(a_name, 0),
-                    name_b: counts_b.get(b_name, 0),
-                    "type": "paired",
-                    "cosine": round(score, 3),
-                })
-            for t in unique_a:
-                rows_ct.append({
-                    "theme": t,
-                    name_a: counts_a.get(t, 0),
-                    name_b: 0,
-                    "type": f"{name_a}-specific",
-                    "cosine": float("nan"),
-                })
-            for t in unique_b:
-                rows_ct.append({
-                    "theme": t,
-                    name_a: 0,
-                    name_b: counts_b.get(t, 0),
-                    "type": f"{name_b}-specific",
-                    "cosine": float("nan"),
-                })
-
-            ct_df = pd.DataFrame(rows_ct)
-            ct_df["total"] = ct_df[name_a] + ct_df[name_b]
-            ct_df = ct_df.sort_values("total", ascending=False).drop(columns="total").reset_index(drop=True)
-            st.dataframe(ct_df, use_container_width=True)
-
-            # Chi-squared test
-            counts_for_chi2 = ct_df[[name_a, name_b]].dropna()
-            if counts_for_chi2.shape[0] >= 2:
-                try:
-                    chi2_stat, p_val, dof, _ = chi2_contingency(counts_for_chi2)
-                    chi_col1, chi_col2, chi_col3 = st.columns(3)
-                    chi_col1.metric("χ² statistic", f"{chi2_stat:.2f}")
-                    chi_col2.metric("Degrees of freedom", dof)
-                    chi_col3.metric("p-value", f"{p_val:.4f}")
-                    if p_val < 0.05:
-                        st.success(
-                            f"p = {p_val:.4f} < 0.05 — statistically significant difference "
-                            f"in topic distribution between {name_a} and {name_b}."
-                        )
-                    else:
-                        st.info(
-                            f"p = {p_val:.4f} ≥ 0.05 — no statistically significant difference detected."
-                        )
-                except ValueError as e:
-                    st.warning(f"Chi-squared test could not be computed: {e}")
-
-            # Comparative bar chart
-            st.subheader("Comparative frequency chart")
-
-            if not ct_df.empty:
-                pct_df = ct_df.copy()
-                total_a = pct_df[name_a].sum()
-                total_b = pct_df[name_b].sum()
-                pct_df[f"{name_a} %"] = (pct_df[name_a] / total_a * 100).round(1) if total_a else 0
-                pct_df[f"{name_b} %"] = (pct_df[name_b] / total_b * 100).round(1) if total_b else 0
-
-                sorted_themes = pct_df.sort_values(f"{name_a} %", ascending=False)["theme"].tolist()
-                formatted_labels = [t.replace(" / ", "\n") for t in sorted_themes]
-
-                plot_melt = pct_df.melt(
-                    id_vars="theme",
-                    value_vars=[f"{name_a} %", f"{name_b} %"],
-                    var_name="Condition",
-                    value_name="Percentage",
-                )
-                plot_melt["Condition"] = plot_melt["Condition"].str.replace(" %", "")
-
-                n_t = len(sorted_themes)
-                fig_bar, ax_bar = plt.subplots(figsize=(9, max(4, n_t * 0.42 + 1.2)))
-                sns.barplot(
-                    data=plot_melt,
-                    y="theme",
-                    x="Percentage",
-                    hue="Condition",
-                    palette={name_a: "#e11515", name_b: "#1db11a"},
-                    order=sorted_themes,
-                    ax=ax_bar,
-                )
-                ax_bar.set_yticklabels(formatted_labels, fontsize=8.5)
-                ax_bar.set_title(
-                    f"Experiential theme frequencies: {name_a} vs {name_b}", fontsize=12
-                )
-                ax_bar.set_xlabel("% of sentences within condition", fontsize=10)
-                ax_bar.set_ylabel("")
-                ax_bar.grid(axis="x", linewidth=0.5, alpha=0.5)
-                ax_bar.grid(axis="y", linestyle="", alpha=0)
-                ax_bar.set_xlim(0, plot_melt["Percentage"].max() * 1.15)
-                for container in ax_bar.containers:
-                    lbs = [f"{v:.1f}%" if v > 0 else "" for v in container.datavalues]
-                    ax_bar.bar_label(container, labels=lbs, label_type="edge", fontsize=7.5, padding=2)
-                legend = ax_bar.legend(title="Condition", frameon=True, facecolor="white")
-                legend.get_title().set_fontweight("bold")
-                plt.tight_layout()
-                st.pyplot(fig_bar)
-
-                buf_bar = BytesIO()
-                fig_bar.savefig(buf_bar, format="png", dpi=200, bbox_inches="tight")
-                plt.close(fig_bar)
-
-                dl1, dl2 = st.columns(2)
-                with dl1:
-                    st.download_button(
-                        "Download bar chart (PNG)",
-                        data=buf_bar.getvalue(),
-                        file_name=f"freq_comparison_{name_a}_{name_b}.png",
-                        mime="image/png",
-                        use_container_width=True,
-                    )
-                with dl2:
-                    st.download_button(
-                        "Download contingency table (CSV)",
-                        data=ct_df.to_csv(index=False).encode("utf-8-sig"),
-                        file_name=f"contingency_{name_a}_{name_b}.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
+        _condition_comparison_ui(selected_embedding_model)
 
     # --- HISTORY TAB ---
     with history_tab:

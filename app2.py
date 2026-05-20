@@ -34,6 +34,9 @@ import altair as alt
 
 from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
+import seaborn as sns
+from scipy.stats import chi2_contingency
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 #to remove funciton locally defined here, we can use importing from mosaic_core
@@ -700,6 +703,121 @@ def perform_topic_modeling(_docs, _embeddings, config_hash):
     return topic_model, reduced, all_labels, len(info) - 1, outlier_pct
 
 
+# =====================================================================
+# 5b. Zero-shot helpers
+# =====================================================================
+
+class _ZSPassThrough:
+    """Dummy UMAP that passes embeddings unchanged (zero-shot doesn't need dim-reduction)."""
+    def fit(self, X, y=None): return self
+    def transform(self, X): return X
+
+class _ZSDummyClustering:
+    """Dummy HDBSCAN that marks every doc as outlier so zero-shot does all the work."""
+    def __init__(self): self.labels_ = None
+    def fit(self, X, y=None):
+        self.labels_ = np.array([-1] * len(X))
+        return self
+
+
+@st.cache_data
+def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model_name):
+    """Run BERTopic zero-shot classification against a fixed list of categories."""
+    emb_model = load_embedding_model(embedding_model_name)
+    topic_model = BERTopic(
+        embedding_model=emb_model,
+        umap_model=_ZSPassThrough(),
+        hdbscan_model=_ZSDummyClustering(),
+        vectorizer_model=CountVectorizer(stop_words="english"),
+        zeroshot_topic_list=list(categories),
+        zeroshot_min_similarity=min_similarity,
+        verbose=False,
+    )
+    topics, _ = topic_model.fit_transform(list(_docs), np.asarray(_embeddings))
+    return topics, topic_model.get_topic_info()
+
+
+# =====================================================================
+# 5c. Condition-comparison helpers
+# =====================================================================
+
+def _parse_condition_csv(df: pd.DataFrame) -> dict[str, list[str]]:
+    """
+    Accept two CSV formats exported by the main pipeline and return
+    {topic_name: [sentence, sentence, ...]}
+
+    Supported formats:
+    - "Row per topic"   : columns include `topic_name` and `texts` (pipe-separated)
+    - "Long / all-sentences" : columns include `Topic Name` and `Document`
+    """
+    if "topic_name" in df.columns and "texts" in df.columns:
+        out: dict[str, list[str]] = {}
+        for _, row in df.iterrows():
+            name = str(row["topic_name"]).strip()
+            if name in ("Unlabelled", "Outlier", "Too Specific (Idiosyncratic)", ""):
+                continue
+            texts_raw = row["texts"]
+            if not isinstance(texts_raw, str) or not texts_raw.strip():
+                continue
+            sentences = [s.strip() for s in texts_raw.split(" | ") if s.strip()]
+            if sentences:
+                out[name] = sentences
+        return out
+    if "Topic Name" in df.columns and "Document" in df.columns:
+        out = {}
+        for _, row in df.iterrows():
+            name = str(row["Topic Name"]).strip()
+            if name in ("Unlabelled", "Outlier", "Too Specific (Idiosyncratic)", ""):
+                continue
+            sentence = str(row["Document"]).strip()
+            if sentence:
+                out.setdefault(name, []).append(sentence)
+        return out
+    return {}
+
+
+@st.cache_data
+def _embed_sentences(sentences: tuple[str, ...], model_name: str) -> np.ndarray:
+    """Embed a deduplicated tuple of sentences (cache-friendly)."""
+    model = load_embedding_model(model_name)
+    return model.encode(list(sentences), show_progress_bar=False, convert_to_numpy=True)
+
+
+@st.cache_data
+def compute_condition_similarity(
+    topics_a: dict,
+    topics_b: dict,
+    model_name: str,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """
+    Given two dicts of {topic_name: [sentences]}, embed all sentences,
+    build mean topic vectors, and return (similarity_matrix_df, vec_a, vec_b).
+    """
+    # Collect all unique sentences across both conditions for a single encode pass
+    all_sents_a = [s for sents in topics_a.values() for s in sents]
+    all_sents_b = [s for sents in topics_b.values() for s in sents]
+
+    unique_sents = list(dict.fromkeys(all_sents_a + all_sents_b))
+    embeddings = _embed_sentences(tuple(unique_sents), model_name)
+    sent_to_vec = {s: embeddings[i] for i, s in enumerate(unique_sents)}
+
+    def _mean_vec(sents):
+        vecs = [sent_to_vec[s] for s in sents if s in sent_to_vec]
+        return np.mean(vecs, axis=0) if vecs else None
+
+    topic_names_a = list(topics_a.keys())
+    topic_names_b = list(topics_b.keys())
+
+    vecs_a = np.array([v for name in topic_names_a if (v := _mean_vec(topics_a[name])) is not None])
+    vecs_b = np.array([v for name in topic_names_b if (v := _mean_vec(topics_b[name])) is not None])
+
+    valid_a = [n for n in topic_names_a if _mean_vec(topics_a[n]) is not None]
+    valid_b = [n for n in topic_names_b if _mean_vec(topics_b[n]) is not None]
+
+    sim = cosine_similarity(vecs_a, vecs_b)
+    sim_df = pd.DataFrame(sim, index=valid_a, columns=valid_b)
+    return sim_df, vecs_a, vecs_b
+
 
 def generate_and_save_embeddings(
     csv_path,
@@ -1339,7 +1457,7 @@ else:
     # =================================================================
     # 9. Visualisation & History Tabs
     # =================================================================
-    main_tab, history_tab, compare_tab = st.tabs(["Main Results", "Run History", "Compare Runs"])
+    main_tab, zeroshot_tab, condition_tab, history_tab, compare_tab = st.tabs(["Main Results", "Zero-Shot Classification", "Condition Comparison", "Run History", "Compare Runs"])
 
 
     def load_history():
@@ -2086,6 +2204,462 @@ else:
 
         else:
             st.info("Click 'Run Analysis' (scroll down left corner - after params selection -) to begin.")
+
+    # --- ZERO-SHOT TAB ---
+    with zeroshot_tab:
+        st.subheader("Zero-Shot Topic Classification")
+        st.caption(
+            "Classify your documents into **predefined categories** using semantic similarity. "
+            "Uses the same preprocessed docs and embeddings as the main pipeline — no extra embedding step needed."
+        )
+
+        _ZS_DEFAULT_CATEGORIES = """\
+Time, Effort and Desire
+Peace, Bliss and Silence
+Self-Knowledge, Autonomous Cognizance and Insight
+Wakeful Presence
+Pure Awareness in Dream and Sleep
+Luminosity
+Thoughts and Feelings
+Emptiness and Non-egoic Self-awareness
+Sensory Perception in Body and Space
+Touching World and Self
+Mental Agency
+Witness Consciousness"""
+
+        zs_categories_raw = st.text_area(
+            "Categories — one per line (edit freely)",
+            value=_ZS_DEFAULT_CATEGORIES,
+            height=260,
+            help="These are the predefined topics you want to classify documents into. "
+                 "Edit or replace them with categories relevant to your dataset.",
+        )
+
+        zs_col1, zs_col2 = st.columns([1, 2])
+        with zs_col1:
+            zs_min_sim = st.slider(
+                "Minimum similarity threshold",
+                min_value=0.1,
+                max_value=0.9,
+                value=0.5,
+                step=0.05,
+                help="Documents whose cosine similarity to every category falls below this "
+                     "value are left as 'Unclassified'. Lower = more docs classified, higher = stricter.",
+            )
+
+        with zs_col2:
+            st.info(
+                f"**{len(docs):,}** documents ready · embedding model: `{selected_embedding_model}`\n\n"
+                "The category labels are embedded with the same model used to encode your docs, "
+                "so performance depends on how well the model captures semantic similarity."
+            )
+
+        if st.button("Run Zero-Shot Classification", type="primary", key="zs_run_btn"):
+            zs_categories = [c.strip() for c in zs_categories_raw.strip().splitlines() if c.strip()]
+            if not zs_categories:
+                st.error("Please enter at least one category.")
+            else:
+                with st.spinner(f"Classifying {len(docs):,} documents into {len(zs_categories)} categories…"):
+                    try:
+                        zs_topics, zs_topic_info = run_zeroshot(
+                            docs,
+                            embeddings,
+                            tuple(zs_categories),
+                            zs_min_sim,
+                            selected_embedding_model,
+                        )
+                        st.session_state["zs_results"] = (zs_topics, zs_topic_info, zs_categories)
+                    except Exception as e:
+                        st.error(f"Zero-shot classification failed: {e}")
+
+        if "zs_results" in st.session_state:
+            zs_topics, zs_topic_info, zs_categories = st.session_state["zs_results"]
+
+            # Summary metrics
+            total_zs = len(zs_topics)
+            classified_zs = sum(1 for t in zs_topics if t != -1)
+            unclassified_zs = total_zs - classified_zs
+
+            zm1, zm2, zm3 = st.columns(3)
+            zm1.metric("Total documents", f"{total_zs:,}")
+            zm2.metric("Classified", f"{classified_zs:,} ({100*classified_zs/total_zs:.1f}%)")
+            zm3.metric("Unclassified", f"{unclassified_zs:,} ({100*unclassified_zs/total_zs:.1f}%)")
+
+            # Build per-doc DataFrame
+            zs_name_map = zs_topic_info.set_index("Topic")["Name"].to_dict()
+            zs_df = pd.DataFrame({"sentence": docs, "topic_id": zs_topics})
+            zs_df["category"] = zs_df["topic_id"].map(zs_name_map).fillna("Unclassified")
+
+            # Bar chart (classified topics only, sorted by count)
+            zs_plot_df = (
+                zs_topic_info[zs_topic_info["Topic"] != -1]
+                .sort_values("Count", ascending=True)
+                .reset_index(drop=True)
+            )
+
+            if not zs_plot_df.empty:
+                st.subheader("Distribution across categories")
+                fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.55)))
+                bars = ax_zs.barh(zs_plot_df["Name"], zs_plot_df["Count"], color="#4C72B0")
+                for bar in bars:
+                    w = bar.get_width()
+                    ax_zs.text(w + 1, bar.get_y() + bar.get_height() / 2, str(int(w)),
+                               va="center", ha="left", fontsize=9)
+                ax_zs.set_xlabel("Number of documents")
+                ax_zs.set_xlim(0, zs_plot_df["Count"].max() * 1.12)
+                ax_zs.invert_yaxis()
+                plt.tight_layout()
+                st.pyplot(fig_zs)
+
+                buf_zs = BytesIO()
+                fig_zs.savefig(buf_zs, format="png", dpi=200, bbox_inches="tight")
+                st.download_button(
+                    "Download chart as PNG",
+                    data=buf_zs.getvalue(),
+                    file_name=f"zeroshot_chart_{os.path.splitext(os.path.basename(CSV_PATH))[0]}.png",
+                    mime="image/png",
+                )
+                plt.close(fig_zs)
+
+            # Per-category expandable view
+            st.subheader("Sentences per category")
+            for _, row_zs in zs_plot_df.sort_values("Count", ascending=False).iterrows():
+                cat_name = row_zs["Name"]
+                count_zs = row_zs["Count"]
+                with st.expander(f"{cat_name}  ({count_zs} sentences)"):
+                    cat_sentences = zs_df[zs_df["category"] == cat_name]["sentence"].reset_index(drop=True)
+                    n_show = st.slider(
+                        "Sentences to show", 5, min(100, len(cat_sentences)), 10,
+                        key=f"zs_show_{cat_name}"
+                    )
+                    st.dataframe(
+                        cat_sentences.head(n_show).to_frame("sentence"),
+                        use_container_width=True,
+                    )
+
+            # Unclassified preview
+            with st.expander(f"Unclassified  ({unclassified_zs} sentences)"):
+                unclass_sentences = zs_df[zs_df["category"] == "Unclassified"]["sentence"].reset_index(drop=True)
+                st.dataframe(unclass_sentences.head(50).to_frame("sentence"), use_container_width=True)
+
+            # Download full results
+            zs_base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            st.download_button(
+                "Download full classification results (CSV)",
+                data=zs_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"zeroshot_{zs_base}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    # --- CONDITION COMPARISON TAB ---
+    with condition_tab:
+        st.subheader("Condition Comparison — Semantic Similarity")
+        st.caption(
+            "Compare two sets of topics (e.g. two experimental conditions) by computing "
+            "the **cosine similarity between their mean topic vectors**. "
+            "Upload a **topics summary CSV** (one row per topic, `topic_name` + `texts` columns, "
+            "as exported by the main pipeline) for each condition."
+        )
+
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            cond_name_a = st.text_input("Condition A name", value="Condition A", key="cond_name_a")
+            cond_file_a = st.file_uploader(
+                "Topics CSV — Condition A",
+                type=["csv"],
+                key="cond_file_a",
+                help="Upload the `topics_summary_*.csv` or `all_sentences_*.csv` exported from the main pipeline.",
+            )
+        with cc2:
+            cond_name_b = st.text_input("Condition B name", value="Condition B", key="cond_name_b")
+            cond_file_b = st.file_uploader(
+                "Topics CSV — Condition B",
+                type=["csv"],
+                key="cond_file_b",
+            )
+
+        sim_col, thresh_col = st.columns([1, 1])
+        with sim_col:
+            cond_threshold = st.slider(
+                "Match threshold (cosine similarity)",
+                min_value=0.50,
+                max_value=0.99,
+                value=0.85,
+                step=0.01,
+                help="Pairs above this threshold are considered 'shared' topics. "
+                     "Lower = more lenient matching.",
+            )
+        with thresh_col:
+            st.info(
+                f"Embedding model: `{selected_embedding_model}`  \n"
+                "Sentences in each topic CSV are embedded and averaged to form a "
+                "single topic vector, then cosine similarity is computed pairwise."
+            )
+
+        run_cond = st.button(
+            "Run Comparison",
+            type="primary",
+            key="cond_run_btn",
+            disabled=(cond_file_a is None or cond_file_b is None),
+        )
+
+        if cond_file_a is None or cond_file_b is None:
+            st.info("Upload a CSV for both conditions to enable the comparison.")
+
+        if run_cond and cond_file_a and cond_file_b:
+            try:
+                df_a = pd.read_csv(cond_file_a)
+                df_b = pd.read_csv(cond_file_b)
+            except Exception as e:
+                st.error(f"Could not read CSV: {e}")
+                st.stop()
+
+            topics_a = _parse_condition_csv(df_a)
+            topics_b = _parse_condition_csv(df_b)
+
+            if not topics_a:
+                st.error(
+                    f"Could not find topics in the Condition A CSV. "
+                    "Expected columns `topic_name` + `texts`, or `Topic Name` + `Document`."
+                )
+                st.stop()
+            if not topics_b:
+                st.error("Could not find topics in the Condition B CSV.")
+                st.stop()
+
+            with st.spinner(
+                f"Embedding {sum(len(v) for v in topics_a.values()) + sum(len(v) for v in topics_b.values())} "
+                "sentences and computing similarity…"
+            ):
+                sim_df, _, _ = compute_condition_similarity(
+                    topics_a, topics_b, selected_embedding_model
+                )
+
+            st.session_state["cond_sim"] = {
+                "sim_df": sim_df,
+                "topics_a": topics_a,
+                "topics_b": topics_b,
+                "name_a": cond_name_a,
+                "name_b": cond_name_b,
+                "threshold": cond_threshold,
+            }
+
+        if "cond_sim" in st.session_state:
+            cs = st.session_state["cond_sim"]
+            sim_df: pd.DataFrame = cs["sim_df"]
+            topics_a: dict = cs["topics_a"]
+            topics_b: dict = cs["topics_b"]
+            name_a: str = cs["name_a"]
+            name_b: str = cs["name_b"]
+            # allow live threshold changes without re-running
+            threshold = cond_threshold
+
+            # ── Heatmap ──────────────────────────────────────────────────
+            st.subheader("Cosine Similarity Heatmap")
+            fig_heat, ax_heat = plt.subplots(
+                figsize=(max(6, len(sim_df.columns) * 1.2), max(4, len(sim_df) * 0.9))
+            )
+            sns.heatmap(
+                sim_df,
+                annot=True,
+                fmt=".2f",
+                cmap="viridis",
+                vmin=0.5,
+                vmax=1.0,
+                linewidths=0.4,
+                ax=ax_heat,
+            )
+            ax_heat.set_title(
+                f"Semantic similarity: {name_a} vs {name_b}", fontsize=13
+            )
+            ax_heat.set_xlabel(name_b, fontsize=11)
+            ax_heat.set_ylabel(name_a, fontsize=11)
+            plt.xticks(rotation=35, ha="right", fontsize=8)
+            plt.yticks(rotation=0, fontsize=8)
+            plt.tight_layout()
+            st.pyplot(fig_heat)
+
+            buf_heat = BytesIO()
+            fig_heat.savefig(buf_heat, format="png", dpi=200, bbox_inches="tight")
+            st.download_button(
+                "Download heatmap as PNG",
+                data=buf_heat.getvalue(),
+                file_name=f"similarity_heatmap_{name_a}_{name_b}.png",
+                mime="image/png",
+            )
+            plt.close(fig_heat)
+
+            # ── Greedy matching ───────────────────────────────────────────
+            st.subheader(f"Matched topics (threshold ≥ {threshold:.2f})")
+
+            matrix_copy = sim_df.copy()
+            shared = []
+            unique_a = list(sim_df.index)
+            unique_b = list(sim_df.columns)
+
+            while True:
+                max_score = float(matrix_copy.max().max())
+                if max_score < threshold:
+                    break
+                idx_a, idx_b = matrix_copy.stack().idxmax()
+                shared.append((idx_a, idx_b, max_score))
+                if idx_a in unique_a:
+                    unique_a.remove(idx_a)
+                if idx_b in unique_b:
+                    unique_b.remove(idx_b)
+                matrix_copy.loc[idx_a, :] = 0.0
+                matrix_copy.loc[:, idx_b] = 0.0
+
+            if shared:
+                shared_df = pd.DataFrame(shared, columns=[name_a, name_b, "cosine_similarity"])
+                shared_df = shared_df.sort_values("cosine_similarity", ascending=False).reset_index(drop=True)
+                st.success(f"Found **{len(shared)} shared topic pairs** above threshold {threshold:.2f}")
+                st.dataframe(shared_df, use_container_width=True)
+            else:
+                st.warning(f"No topic pairs found above threshold {threshold:.2f}. Try lowering the threshold.")
+
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                st.markdown(f"**Unique to {name_a}** ({len(unique_a)} topics)")
+                for t in unique_a:
+                    st.markdown(f"- {t}")
+            with mc2:
+                st.markdown(f"**Unique to {name_b}** ({len(unique_b)} topics)")
+                for t in unique_b:
+                    st.markdown(f"- {t}")
+
+            # ── Counts and contingency table ──────────────────────────────
+            st.subheader("Frequency comparison")
+
+            counts_a = {name: len(sents) for name, sents in topics_a.items()}
+            counts_b = {name: len(sents) for name, sents in topics_b.items()}
+
+            rows_ct = []
+            matched_a = {a for a, _, _ in shared}
+            matched_b = {b for _, b, _ in shared}
+
+            for a_name, b_name, score in sorted(shared, key=lambda x: -x[2]):
+                rows_ct.append({
+                    "theme": f"{a_name} / {b_name}",
+                    name_a: counts_a.get(a_name, 0),
+                    name_b: counts_b.get(b_name, 0),
+                    "type": "paired",
+                    "cosine": round(score, 3),
+                })
+            for t in unique_a:
+                rows_ct.append({
+                    "theme": t,
+                    name_a: counts_a.get(t, 0),
+                    name_b: 0,
+                    "type": f"{name_a}-specific",
+                    "cosine": float("nan"),
+                })
+            for t in unique_b:
+                rows_ct.append({
+                    "theme": t,
+                    name_a: 0,
+                    name_b: counts_b.get(t, 0),
+                    "type": f"{name_b}-specific",
+                    "cosine": float("nan"),
+                })
+
+            ct_df = pd.DataFrame(rows_ct)
+            ct_df["total"] = ct_df[name_a] + ct_df[name_b]
+            ct_df = ct_df.sort_values("total", ascending=False).drop(columns="total").reset_index(drop=True)
+            st.dataframe(ct_df, use_container_width=True)
+
+            # Chi-squared test
+            counts_for_chi2 = ct_df[[name_a, name_b]].dropna()
+            if counts_for_chi2.shape[0] >= 2:
+                try:
+                    chi2_stat, p_val, dof, _ = chi2_contingency(counts_for_chi2)
+                    chi_col1, chi_col2, chi_col3 = st.columns(3)
+                    chi_col1.metric("χ² statistic", f"{chi2_stat:.2f}")
+                    chi_col2.metric("Degrees of freedom", dof)
+                    chi_col3.metric("p-value", f"{p_val:.4f}")
+                    if p_val < 0.05:
+                        st.success(
+                            f"p = {p_val:.4f} < 0.05 — statistically significant difference "
+                            f"in topic distribution between {name_a} and {name_b}."
+                        )
+                    else:
+                        st.info(
+                            f"p = {p_val:.4f} ≥ 0.05 — no statistically significant difference detected."
+                        )
+                except ValueError as e:
+                    st.warning(f"Chi-squared test could not be computed: {e}")
+
+            # Comparative bar chart
+            st.subheader("Comparative frequency chart")
+
+            if not ct_df.empty:
+                pct_df = ct_df.copy()
+                total_a = pct_df[name_a].sum()
+                total_b = pct_df[name_b].sum()
+                pct_df[f"{name_a} %"] = (pct_df[name_a] / total_a * 100).round(1) if total_a else 0
+                pct_df[f"{name_b} %"] = (pct_df[name_b] / total_b * 100).round(1) if total_b else 0
+
+                sorted_themes = pct_df.sort_values(f"{name_a} %", ascending=False)["theme"].tolist()
+                formatted_labels = [t.replace(" / ", "\n") for t in sorted_themes]
+
+                plot_melt = pct_df.melt(
+                    id_vars="theme",
+                    value_vars=[f"{name_a} %", f"{name_b} %"],
+                    var_name="Condition",
+                    value_name="Percentage",
+                )
+                plot_melt["Condition"] = plot_melt["Condition"].str.replace(" %", "")
+
+                n_t = len(sorted_themes)
+                fig_bar, ax_bar = plt.subplots(figsize=(9, max(4, n_t * 0.42 + 1.2)))
+                sns.barplot(
+                    data=plot_melt,
+                    y="theme",
+                    x="Percentage",
+                    hue="Condition",
+                    palette={name_a: "#e11515", name_b: "#1db11a"},
+                    order=sorted_themes,
+                    ax=ax_bar,
+                )
+                ax_bar.set_yticklabels(formatted_labels, fontsize=8.5)
+                ax_bar.set_title(
+                    f"Experiential theme frequencies: {name_a} vs {name_b}", fontsize=12
+                )
+                ax_bar.set_xlabel("% of sentences within condition", fontsize=10)
+                ax_bar.set_ylabel("")
+                ax_bar.grid(axis="x", linewidth=0.5, alpha=0.5)
+                ax_bar.grid(axis="y", linestyle="", alpha=0)
+                ax_bar.set_xlim(0, plot_melt["Percentage"].max() * 1.15)
+                for container in ax_bar.containers:
+                    lbs = [f"{v:.1f}%" if v > 0 else "" for v in container.datavalues]
+                    ax_bar.bar_label(container, labels=lbs, label_type="edge", fontsize=7.5, padding=2)
+                legend = ax_bar.legend(title="Condition", frameon=True, facecolor="white")
+                legend.get_title().set_fontweight("bold")
+                plt.tight_layout()
+                st.pyplot(fig_bar)
+
+                buf_bar = BytesIO()
+                fig_bar.savefig(buf_bar, format="png", dpi=200, bbox_inches="tight")
+                plt.close(fig_bar)
+
+                dl1, dl2 = st.columns(2)
+                with dl1:
+                    st.download_button(
+                        "Download bar chart (PNG)",
+                        data=buf_bar.getvalue(),
+                        file_name=f"freq_comparison_{name_a}_{name_b}.png",
+                        mime="image/png",
+                        use_container_width=True,
+                    )
+                with dl2:
+                    st.download_button(
+                        "Download contingency table (CSV)",
+                        data=ct_df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"contingency_{name_a}_{name_b}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
 
     # --- HISTORY TAB ---
     with history_tab:

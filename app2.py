@@ -593,8 +593,8 @@ def get_config_hash(cfg):
 
 
 @st.cache_data
-def perform_topic_modeling(_docs, _embeddings, config_hash):
-    """Fit BERTopic using cached result, or load from pipeline-saved model."""
+def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
+    """Fit BERTopic. dataset_key is only for cache invalidation across datasets."""
 
     saved_model_path = CACHE_DIR / "topic_model"
     saved_reduced_path = CACHE_DIR / "reduced_2d.npy"
@@ -722,7 +722,7 @@ class _ZSDummyClustering:
 
 
 @st.cache_data
-def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model_name):
+def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model_name, dataset_key=""):
     """Run BERTopic zero-shot classification against a fixed list of categories."""
     emb_model = load_embedding_model(embedding_model_name)
     topic_model = BERTopic(
@@ -1192,8 +1192,24 @@ DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
 
 METADATA_FILE = DOCS_FILE.replace("_docs.json", "_metadata.csv")
     
-# Cache management 
+# Cache management
 st.sidebar.markdown("### Cache")
+
+with st.sidebar.expander("When do I need to clear the cache?"):
+    st.markdown(
+        """
+**You do NOT need to clear the cache when:**
+- Switching to a different dataset — each dataset has its own embedding files, and the topic model cache is automatically invalidated
+- Changing any parameter (embedding model, UMAP, HDBSCAN, etc.) — the cache key changes automatically
+
+**You DO need to clear the cache when:**
+- Your embeddings are corrupted or were generated from wrong data and you want to regenerate them for the current dataset + settings
+- You want to force a fresh topic model run despite using identical settings on the same data
+
+The button below deletes the embedding files for the **currently selected** dataset/settings combination only, then clears all in-memory caches.
+        """
+    )
+
 if st.sidebar.button(
     "Clear cached files for this configuration", use_container_width=True
 ):
@@ -1503,9 +1519,10 @@ else:
 
         with st.spinner("Performing topic modeling..."):
             model, reduced, labels, n_topics, outlier_pct = perform_topic_modeling(
-                docs, embeddings, get_config_hash(current_config)
+                docs, embeddings, get_config_hash(current_config), DOCS_FILE
             )
         st.session_state.latest_results = (model, reduced, labels)
+        st.session_state.latest_results_docs_file = DOCS_FILE
 
         # ==========================================================
         # Load Metadata to calculate Topic Diversity
@@ -1571,7 +1588,7 @@ else:
 
 
 
-        st.session_state.latest_config_hash = get_config_hash(current_config)
+        st.session_state.latest_config_hash = get_config_hash(current_config) + "|" + DOCS_FILE
         st.session_state.latest_config = current_config
 
 
@@ -1600,7 +1617,16 @@ else:
 
     # --- MAIN TAB ---
     with main_tab:
-        if "latest_results" in st.session_state:
+        _results_stale = (
+            "latest_results" in st.session_state
+            and st.session_state.get("latest_results_docs_file") != DOCS_FILE
+        )
+        if _results_stale:
+            st.warning(
+                "The dataset has changed since the last analysis. "
+                "Click **Run Analysis** to analyse the current dataset."
+            )
+        if "latest_results" in st.session_state and not _results_stale:
             tm, reduced, labs = st.session_state.latest_results
 
 
@@ -2132,6 +2158,21 @@ else:
             gran = "sentences" if selected_granularity else "reports"
             
 
+            st.markdown(
+                "**Save this file if you want to compare conditions later** — "
+                "the *Condition Comparison* tab requires one of these CSVs per condition."
+            )
+            csv_name = f"topics_summary_{base}_{gran}.csv"
+            st.download_button(
+                "⬇ Save Summary CSV for Condition Comparison (Row = Topic)",
+                data=export_csv.to_csv(index=False).encode("utf-8-sig"),
+                file_name=csv_name,
+                mime="text/csv",
+                use_container_width=True,
+                type="primary",
+            )
+            st.markdown("---")
+
             cL, cC, cR = st.columns(3)
 
             with cL:
@@ -2244,15 +2285,27 @@ Witness Consciousness"""
                 max_value=0.9,
                 value=0.5,
                 step=0.05,
-                help="Documents whose cosine similarity to every category falls below this "
-                     "value are left as 'Unclassified'. Lower = more docs classified, higher = stricter.",
+                help=(
+                    "Cosine similarity ranges from 0 (completely unrelated) to 1 (identical meaning).\n\n"
+                    "Each sentence is compared to every category label. "
+                    "If its highest similarity score is below this threshold, it is left as 'Unclassified'.\n\n"
+                    "**Typical values:**\n"
+                    "- 0.3–0.4 → very lenient, most sentences get assigned (risk of false positives)\n"
+                    "- 0.5 → balanced default\n"
+                    "- 0.6–0.7 → strict, only high-confidence matches classified\n\n"
+                    "If too many sentences are Unclassified, lower the threshold. "
+                    "If the categories feel noisy, raise it."
+                ),
             )
 
         with zs_col2:
             st.info(
-                f"**{len(docs):,}** documents ready · embedding model: `{selected_embedding_model}`\n\n"
-                "The category labels are embedded with the same model used to encode your docs, "
-                "so performance depends on how well the model captures semantic similarity."
+                f"**{len(docs):,}** documents ready\n\n"
+                f"**Embedding model:** `{selected_embedding_model}` (set in the sidebar)\n\n"
+                "Zero-shot works by embedding both your documents **and** your category labels "
+                "into the same vector space, then assigning each sentence to the nearest category. "
+                f"Your documents are already embedded — only the category labels will be re-encoded "
+                f"using `{selected_embedding_model}` when you click Run."
             )
 
         if st.button("Run Zero-Shot Classification", type="primary", key="zs_run_btn"):
@@ -2268,12 +2321,16 @@ Witness Consciousness"""
                             tuple(zs_categories),
                             zs_min_sim,
                             selected_embedding_model,
+                            DOCS_FILE,
                         )
                         st.session_state["zs_results"] = (zs_topics, zs_topic_info, zs_categories)
+                        st.session_state["zs_results_docs_file"] = DOCS_FILE
                     except Exception as e:
                         st.error(f"Zero-shot classification failed: {e}")
 
-        if "zs_results" in st.session_state:
+        if "zs_results" in st.session_state and st.session_state.get("zs_results_docs_file") != DOCS_FILE:
+            st.warning("The dataset has changed. Re-run zero-shot classification for the current dataset.")
+        elif "zs_results" in st.session_state:
             zs_topics, zs_topic_info, zs_categories = st.session_state["zs_results"]
 
             # Summary metrics
@@ -2356,28 +2413,46 @@ Witness Consciousness"""
     # --- CONDITION COMPARISON TAB ---
     with condition_tab:
         st.subheader("Condition Comparison — Semantic Similarity")
-        st.caption(
-            "Compare two sets of topics (e.g. two experimental conditions) by computing "
-            "the **cosine similarity between their mean topic vectors**. "
-            "Upload a **topics summary CSV** (one row per topic, `topic_name` + `texts` columns, "
-            "as exported by the main pipeline) for each condition."
-        )
+
+        with st.expander("How to use this tab — read first", expanded=True):
+            st.markdown(
+                """
+**This tab compares the topics found in two different conditions** by measuring the semantic
+similarity between their topic vectors.
+
+**Before you can use this tab, you need to:**
+
+1. **Run the full pipeline on Condition A** (upload its CSV, prepare data, run analysis)
+2. In the **Main Results** tab, click the blue **"Save Summary CSV for Condition Comparison"** button — save that file to your computer
+3. **Go back to the sidebar**, upload Condition B's CSV, prepare data, and run analysis
+4. Again click **"Save Summary CSV for Condition Comparison"** — save that second file
+5. Come back here and upload both saved files below
+
+**What the comparison does:**
+- All sentences in each topic are embedded using `{model}` (same model as the sidebar)
+- Each topic is represented by the **mean vector** of its sentences
+- **Cosine similarity** is computed between every pair of topics across conditions
+- A greedy algorithm finds the best-matching pairs above the threshold
+- Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test, and a frequency bar chart
+                """.format(model=selected_embedding_model)
+            )
 
         cc1, cc2 = st.columns(2)
         with cc1:
             cond_name_a = st.text_input("Condition A name", value="Condition A", key="cond_name_a")
             cond_file_a = st.file_uploader(
-                "Topics CSV — Condition A",
+                "Topics summary CSV — Condition A",
                 type=["csv"],
                 key="cond_file_a",
-                help="Upload the `topics_summary_*.csv` or `all_sentences_*.csv` exported from the main pipeline.",
+                help="The `topics_summary_*.csv` saved from the Main Results tab after running the pipeline on Condition A.",
             )
         with cc2:
             cond_name_b = st.text_input("Condition B name", value="Condition B", key="cond_name_b")
             cond_file_b = st.file_uploader(
-                "Topics CSV — Condition B",
+                "Topics summary CSV — Condition B",
                 type=["csv"],
                 key="cond_file_b",
+                help="The `topics_summary_*.csv` saved from the Main Results tab after running the pipeline on Condition B.",
             )
 
         sim_col, thresh_col = st.columns([1, 1])

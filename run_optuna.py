@@ -27,7 +27,13 @@ from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from umap import UMAP
+try:
+    from cuml.manifold import UMAP
+    UMAP_BACKEND = "cuML (GPU)"
+except ImportError:
+    from umap import UMAP
+    UMAP_BACKEND = "umap-learn (CPU)"
+
 from hdbscan import HDBSCAN
 
 from mosaic_core.core_functions import get_cache_dir, get_precomputed_filenames
@@ -41,6 +47,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler("optuna.log")],
 )
 log = logging.getLogger(__name__)
+log.info("UMAP backend: %s", UMAP_BACKEND)
 
 TEXT_COLUMN_CANDIDATES = [
     "cleaned_report", "reflection_answer_english", "reflection_answer",

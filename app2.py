@@ -401,7 +401,8 @@ def get_hf_client(model_id: str):
 
 def _labels_cache_path(config_hash: str, model_id: str) -> Path:
     safe_model = re.sub(r"[^a-zA-Z0-9_.-]", "_", model_id)
-    return CACHE_DIR / f"llm_labels_{safe_model}_{config_hash}.json"
+    short_hash = hashlib.md5(config_hash.encode("utf-8")).hexdigest()[:16]
+    return CACHE_DIR / f"llm_labels_{safe_model}_{short_hash}.json"
 
 def _hf_status_code(e: Exception) -> int | None:
     """Extract HTTP status code from huggingface_hub error, if present."""

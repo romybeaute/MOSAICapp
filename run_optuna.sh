@@ -14,12 +14,13 @@ source .venv/bin/activate
 python run_optuna.py \
     --dataset NDE \
     --csv data/NDE/preprocessed/NDE_reports_grouped.csv \
+    --embedding-model Qwen/Qwen3-Embedding-4B \
     --text-col cleaned_report \
     --sentences \
     --n_trials 100 \
     --min-cluster-size 20 100 \
     --min-samples 10 60 \
-    --n-neighbors 5 30 \
+    --n-neighbors 5 50 \
     --target-min 40 \
     --target-max 110 \
     --subsample 15000

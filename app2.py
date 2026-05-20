@@ -37,6 +37,8 @@ from gensim.models import CoherenceModel
 import seaborn as sns
 from scipy.stats import chi2_contingency
 from sklearn.metrics.pairwise import cosine_similarity
+import plotly.graph_objects as go
+import plotly.express as px
 
 
 #to remove funciton locally defined here, we can use importing from mosaic_core
@@ -1829,6 +1831,24 @@ else:
     # =================================================================
     main_tab, zeroshot_tab, condition_tab, history_tab, compare_tab = st.tabs(["Main Results", "Zero-Shot Classification", "Condition Comparison", "Run History", "Compare Runs"])
 
+    st.markdown(
+        """
+        <style>
+        /* Highlight the first tab (Main Results) in orange */
+        div[data-testid="stTabs"] > div > div > div:first-child button[role="tab"] {
+            color: #E8630A;
+            font-weight: 700;
+            border-bottom: 3px solid #E8630A;
+        }
+        div[data-testid="stTabs"] > div > div > div:first-child button[role="tab"]:hover {
+            color: #E8630A;
+            opacity: 0.8;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
     def load_history():
         path = HISTORY_FILE
@@ -2319,16 +2339,61 @@ else:
             fig.suptitle(plot_title, fontsize=16, y=0.99)
             st.pyplot(fig)
 
-            tm.set_topic_labels(llm_names)
-            # 2. Interactive BERTopic Plotly Integration
-            interactive_fig = tm.visualize_documents(
-                docs,
-                reduced_embeddings=reduced,
-                custom_labels=True,
-                hide_document_hover=False,
-                hide_annotations=False
+            # 2. Interactive Documents & Topics scatter (built directly with plotly)
+            _topic_assignments = np.array(tm.topics_)
+            _unique_topic_ids = sorted(set(_topic_assignments.tolist()))
+            _palette = (
+                px.colors.qualitative.Plotly
+                + px.colors.qualitative.Set2
+                + px.colors.qualitative.Pastel
             )
-            st.plotly_chart(interactive_fig, use_container_width=True)
+            _doc_fig = go.Figure()
+            for _tid in _unique_topic_ids:
+                _mask = np.where(_topic_assignments == _tid)[0]
+                _x = reduced[_mask, 0]
+                _y = reduced[_mask, 1]
+                if _tid == -1:
+                    _label = "Unlabelled"
+                    _color = "#CCCCCC"
+                    _size = 4
+                    _opacity = 0.4
+                else:
+                    _label = llm_names.get(_tid, f"Topic {_tid}")
+                    _color = _palette[_tid % len(_palette)]
+                    _size = 6
+                    _opacity = 0.75
+                _hover = [
+                    f"<b>{_label}</b><br><br>{docs[i][:300]}{'…' if len(docs[i]) > 300 else ''}"
+                    for i in _mask
+                ]
+                _doc_fig.add_trace(go.Scattergl(
+                    x=_x, y=_y,
+                    mode="markers",
+                    name=_label,
+                    marker=dict(color=_color, size=_size, opacity=_opacity),
+                    text=_hover,
+                    hoverinfo="text",
+                ))
+            _doc_fig.update_layout(
+                title=dict(
+                    text="<b>Documents and Topics</b>",
+                    x=0.5, xanchor="center",
+                    font=dict(size=18, color="#222222"),
+                ),
+                template="simple_white",
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=650,
+                margin=dict(l=10, r=10, t=60, b=10),
+                legend=dict(
+                    title="Topics",
+                    bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="#dddddd",
+                    borderwidth=1,
+                    font=dict(size=11),
+                ),
+            )
+            st.plotly_chart(_doc_fig, use_container_width=True)
 
             
 

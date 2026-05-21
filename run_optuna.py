@@ -362,10 +362,10 @@ if __name__ == "__main__":
 
     # ── Search ────────────────────────────────────────────────────────────────
     parser.add_argument("--n_trials",        type=int, default=100)
-    parser.add_argument("--subsample",       type=int, default=15000,
-                        help="Number of docs to use per trial (None = all). "
-                             "Keeps each trial fast (~2 min) on CPU UMAP. "
-                             "Best params are then applied to full data in run_pipeline.py.")
+    parser.add_argument("--subsample",       type=int, default=None,
+                        help="Number of docs to use per trial (default: all). "
+                             "Use e.g. --subsample 15000 to speed up search at the cost "
+                             "of params not generalising to full data.")
 
     # Hyperparameter ranges — pass [min max] for each param
     parser.add_argument("--min-cluster-size", type=int, nargs=2, default=[10, 100],

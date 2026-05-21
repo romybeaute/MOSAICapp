@@ -50,9 +50,9 @@ log = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────────────────────
 PROJECT_ROOT   = Path(__file__).parent
 DATASET_NAME   = "NDE"          # must match the sidebar value in app.py
-CSV_PATH       = "data/preprocessed/NDE/your_big_dataset.csv"   # ← change this
-TEXT_COL       = None              # None = auto-detect; or e.g. "reflection_answer_english"
-EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+CSV_PATH       = "data/NDE/preprocessed/NDE_reports_grouped.csv"
+TEXT_COL       = "cleaned_report"
+EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-4B"
 DEVICE         = "cuda"
 SPLIT_SENTENCES = True
 MIN_WORDS      = 3
@@ -60,13 +60,13 @@ HF_TOKEN       = _load_secret("HF_TOKEN")
 
 CONFIG = {
     "umap_params": {
-        "n_neighbors": 30,
-        "n_components": 5,
+        "n_neighbors": 26,
+        "n_components": 9,
         "min_dist": 0.0,
     },
     "hdbscan_params": {
-        "min_cluster_size": 100,
-        "min_samples": 50,
+        "min_cluster_size": 20,
+        "min_samples": 13,
     },
     "use_vectorizer": True,
     "vectorizer_params": {

@@ -9,10 +9,15 @@ Usage:
     sbatch run_pipeline.sh
 """
 
+import argparse
 import json
 import logging
 import re
 from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--debug", action="store_true", help="Run topic modelling only, skip LLM labelling and plots")
+args = parser.parse_args()
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend for HPC (no display)
@@ -122,6 +127,10 @@ with open(CACHE_DIR / "topics.json", "w") as f:
 n_topics   = len(set(t for t in topics if t != -1))
 n_outliers = sum(1 for t in topics if t == -1)
 log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
+
+if args.debug:
+    log.info("Debug mode — skipping LLM labelling and plots")
+    import sys; sys.exit(0)
 
 # ── Step 3: LLM labelling ─────────────────────────────────────────────────────
 log.info("Step 3 — LLM labelling with Qwen3")

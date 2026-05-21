@@ -126,7 +126,7 @@ log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(to
 # ── Step 3: LLM labelling ─────────────────────────────────────────────────────
 log.info("Step 3 — LLM labelling with Qwen3")
 
-LLM_MODEL = "Qwen/Qwen3-8B-Instruct"
+LLM_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 labels = generate_llm_labels(
     topic_model,

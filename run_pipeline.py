@@ -207,5 +207,43 @@ info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.g
 info_no_outliers.to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 log.info(f"Topic info →  {PLOTS_DIR / 'topic_info.csv'}")
 
+# 4. Interactive HTML — zoomable documents + topics scatter
+try:
+    import plotly.graph_objects as go
+    import plotly.express as px
+
+    topic_assignments = np.array(topics)
+    unique_topic_ids = sorted(set(topic_assignments.tolist()))
+    palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
+    llm_map = {**name_map, **{int(k): v for k, v in labels.items()}}
+
+    doc_fig = go.Figure()
+    for tid in unique_topic_ids:
+        mask = np.where(topic_assignments == tid)[0]
+        x, y = reduced_2d[mask, 0], reduced_2d[mask, 1]
+        label = "Unlabelled" if tid == -1 else llm_map.get(tid, f"Topic {tid}")
+        color = "#CCCCCC" if tid == -1 else palette[tid % len(palette)]
+        size, opacity = (4, 0.4) if tid == -1 else (6, 0.75)
+        hover = [f"<b>{label}</b><br><br>{docs[i][:300]}{'…' if len(docs[i]) > 300 else ''}" for i in mask]
+        doc_fig.add_trace(go.Scattergl(
+            x=x, y=y, mode="markers", name=label,
+            marker=dict(color=color, size=size, opacity=opacity),
+            text=hover, hoverinfo="text",
+        ))
+
+    doc_fig.update_layout(
+        title=dict(text=f"<b>{DATASET_NAME}: Documents and Topics</b>", x=0.5, xanchor="center"),
+        template="simple_white",
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+        height=900, margin=dict(l=10, r=10, t=60, b=10),
+        legend=dict(title="Topics", bgcolor="rgba(255,255,255,0.9)",
+                    bordercolor="#dddddd", borderwidth=1, font=dict(size=10)),
+    )
+    html_path = PLOTS_DIR / "topics_interactive.html"
+    doc_fig.write_html(str(html_path))
+    log.info(f"Interactive HTML →  {html_path}")
+except Exception as e:
+    log.warning(f"Interactive HTML failed: {e}")
+
 log.info(f"Done. All outputs saved to {PLOTS_DIR}")
-log.info("To copy plots to your Mac: scp -r <cluster>:{PLOTS_DIR} .")
+log.info(f"To copy to your Mac: scp -r rb666@artemis:{PLOTS_DIR} ~/Desktop/")

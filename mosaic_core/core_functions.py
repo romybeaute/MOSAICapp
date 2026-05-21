@@ -18,8 +18,19 @@ import nltk
 from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
-from umap import UMAP
+try:
+    import cupy as cp
+    cp.cuda.runtime.getDeviceCount()
+    from cuml.manifold import UMAP
+    UMAP_BACKEND = "cuML (GPU)"
+except Exception:
+    from umap import UMAP
+    UMAP_BACKEND = "umap-learn (CPU)"
+
 from hdbscan import HDBSCAN
+
+logger_umap = logging.getLogger(__name__)
+logger_umap.info("UMAP backend: %s", UMAP_BACKEND)
 from huggingface_hub import InferenceClient
 
 logger = logging.getLogger(__name__)

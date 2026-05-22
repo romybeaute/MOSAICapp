@@ -18,8 +18,8 @@ python run_optuna.py \
     --text-col cleaned_report \
     --sentences \
     --n_trials 100 \
-    --min-cluster-size 20 80 \
-    --min-samples 10 50 \
+    --min-cluster-size 20 100 \
+    --min-samples 10 70 \
     --n-neighbors 15 50 \
     --target-min 35 \
     --target-max 80

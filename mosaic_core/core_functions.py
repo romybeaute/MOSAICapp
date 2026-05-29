@@ -352,6 +352,7 @@ def run_topic_model(docs, embeddings, config):
         vectorizer_model=vectorizer,
         top_n_words=bt_params.get("top_n_words", 10),
         nr_topics=nr_topics,
+        nr_repr_docs=10,
         verbose=False,
     )
     
@@ -411,24 +412,29 @@ Good label examples (use this style):
 - Encounter with a mystical being or presence
 - Encounter with deceased individuals or religious spirits
 - Heightened or unusually vivid senses
-- Sudden understanding or revelation
+- Sudden shift in life trajectory
 - Separation from and return to the body
 - Sensation of moving through darkness or void
 - Overwhelming feeling of peace and warmth
+- Perception of a brilliant or divine light
 
 Bad label examples (avoid this style):
 - Epistemic restructuring of perceptual boundaries  ← jargon
-- Car hits and I remain  ← describes one report, uses "I"
-- You fill me with fear  ← uses "you", too spoken
-- Heard music or sounds suddenly  ← verb at start, not a noun phrase
+- Car hits and I remain  ← describes ONE report, contains "I"
+- Mothers presence with me  ← contains "me", describes one report
+- Lifes trajectory shifted suddenly  ← possessive, verb at the end
+- Memorys perpetual presence  ← possessive without apostrophe, meaningless
+- You fill me with fear  ← "you" and "me", too spoken
+- Heard music or sounds suddenly  ← starts with a verb
 - Want to stay alive  ← direct quote style, too informal
 
 Constraints:
 - Output ONLY the label (no explanation).
-- 3–8 words.
-- Always a noun phrase — never start with a verb or pronoun.
-- Never use first or second person (I, me, my, you, your, we).
-- The label must describe what is shared across the whole cluster, not one single report.
+- 3–7 words.
+- Always a noun phrase — the first word must be a noun or adjective, never a verb or pronoun.
+- Never use first or second person pronouns (I, me, my, mine, you, your, we, our).
+- Never use possessive forms (no apostrophes, no words ending in 's meaning belonging).
+- The label must generalise across ALL reports in the cluster, not describe a single event.
 - Avoid meta-level analytic terms (e.g. epistemic, phenomenological, affective) unless they directly name how the experience is lived.
 - Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
 - No punctuation, no quotes, no extra text.
@@ -504,7 +510,9 @@ def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3
                     "HuggingFace returned 402 Payment Required. "
                     "Monthly credits exhausted—upgrade or skip LLM labeling."
                 ) from e
-            logger.warning(f"LLM labeling failed for topic {tid}: {e}")
+            resp = getattr(e, "response", None)
+            body = getattr(resp, "text", None) or getattr(resp, "content", None)
+            logger.warning(f"LLM labeling failed for topic {tid} (HTTP {code}): {e} | body: {body}")
             labels[int(tid)] = f"Topic {tid}"
     
     return labels

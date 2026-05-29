@@ -18,7 +18,8 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Run topic modelling only, skip LLM labelling and plots")
 parser.add_argument("--output-dir", type=str, default="outputs_MPE", help="Directory for plots and HTML (default: outputs_MPE)")
-parser.add_argument("--llm-model", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct", help="HuggingFace model ID for LLM labelling")
+parser.add_argument("--llm-model", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="HuggingFace model ID for LLM labelling")
+parser.add_argument("--nr-repr-docs", type=int, default=10, help="Number of representative docs per topic for LLM labelling")
 args = parser.parse_args()
 
 import matplotlib
@@ -144,6 +145,19 @@ n_topics   = len(set(t for t in topics if t != -1))
 n_outliers = sum(1 for t in topics if t == -1)
 log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
+# Re-extract representative docs with configured count
+import pandas as _pd
+_documents_df = _pd.DataFrame({"Document": docs, "Topic": topics})
+_repr_docs, _, _, _ = topic_model._extract_representative_docs(
+    topic_model.c_tf_idf_,
+    _documents_df,
+    topic_model.topic_representations_,
+    nr_samples=500,
+    nr_repr_docs=args.nr_repr_docs,
+)
+topic_model.representative_docs_ = _repr_docs
+log.info(f"Representative docs per topic: {args.nr_repr_docs}")
+
 if args.debug:
     log.info("Debug mode — skipping LLM labelling and plots")
     import sys; sys.exit(0)
@@ -229,7 +243,8 @@ log.info(f"Bar chart  →  {bar_path}")
 
 # 3. Topic info CSV — topics + LLM labels + sizes
 info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.get(t, ""))
-info_no_outliers.to_csv(PLOTS_DIR / "topic_info.csv", index=False)
+cols = ["Topic", "LLM_Label"] + [c for c in info_no_outliers.columns if c not in ("Topic", "LLM_Label")]
+info_no_outliers[cols].to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 log.info(f"Topic info →  {PLOTS_DIR / 'topic_info.csv'}")
 
 # 4. Interactive HTML — zoomable documents + topics scatter

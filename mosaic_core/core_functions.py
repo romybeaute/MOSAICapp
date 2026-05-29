@@ -356,12 +356,23 @@ def run_topic_model(docs, embeddings, config):
     )
     
     topics, _ = topic_model.fit_transform(docs, embeddings)
-    
+
+    # Re-extract representative docs with higher count (BERTopic hardcodes 3)
+    documents_df = pd.DataFrame({"Document": docs, "Topic": topics})
+    repr_docs, _, _, _ = topic_model._extract_representative_docs(
+        topic_model.c_tf_idf_,
+        documents_df,
+        topic_model.topic_representations_,
+        nr_samples=500,
+        nr_repr_docs=10,
+    )
+    topic_model.representative_docs_ = repr_docs
+
     reduced_2d = UMAP(
         n_neighbors=15, n_components=2, min_dist=0.0,
         metric="cosine", random_state=42
     ).fit_transform(embeddings)
-    
+
     return topic_model, reduced_2d, topics
 
 
@@ -459,7 +470,7 @@ def get_hf_status_code(exc):
 
 def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3-8B-Instruct",
                         max_topics=50, max_docs_per_topic=10, doc_char_limit=400,
-                        temperature=0.2, docs=None, topics=None):
+                        temperature=0.2):
     """
     Generate topic labels via HuggingFace Inference API.
 
@@ -471,13 +482,6 @@ def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3
     info = topic_model.get_topic_info()
     info = info[info["Topic"] != -1].head(max_topics)
 
-    # Build a lookup from topic_id -> list of docs for sampling more than 3 repr docs
-    topic_to_docs = {}
-    if docs is not None and topics is not None:
-        for doc, tid in zip(docs, topics):
-            if tid != -1:
-                topic_to_docs.setdefault(tid, []).append(doc)
-
     labels = {}
     logger.info(f"Generating LLM labels for {len(info)} topics")
 
@@ -486,12 +490,7 @@ def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3
         keywords = ", ".join([w for w, _ in words[:10]])
 
         try:
-            if topic_to_docs.get(tid):
-                import random
-                pool = topic_to_docs[tid]
-                reps = random.sample(pool, min(max_docs_per_topic, len(pool)))
-            else:
-                reps = (topic_model.get_representative_docs(tid) or [])[:max_docs_per_topic]
+            reps = (topic_model.get_representative_docs(tid) or [])[:max_docs_per_topic]
         except Exception:
             reps = []
         

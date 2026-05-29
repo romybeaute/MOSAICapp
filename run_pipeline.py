@@ -17,6 +17,8 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Run topic modelling only, skip LLM labelling and plots")
+parser.add_argument("--output-dir", type=str, default="outputs", help="Directory for plots and HTML (default: outputs)")
+parser.add_argument("--llm-model", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct", help="HuggingFace model ID for LLM labelling")
 args = parser.parse_args()
 
 import matplotlib
@@ -135,7 +137,7 @@ if args.debug:
 # ── Step 3: LLM labelling ─────────────────────────────────────────────────────
 log.info("Step 3 — LLM labelling with Qwen3")
 
-LLM_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+LLM_MODEL = args.llm_model
 
 labels = generate_llm_labels(
     topic_model,
@@ -159,7 +161,7 @@ log.info(f"Labelled {len(labels)} topics  →  {llm_cache}")
 # ── Step 4: Save plots ────────────────────────────────────────────────────────
 log.info("Step 4 — generating plots")
 
-PLOTS_DIR = PROJECT_ROOT / "outputs"
+PLOTS_DIR = PROJECT_ROOT / args.output_dir
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Build per-document label list (LLM label if available, else BERTopic name)

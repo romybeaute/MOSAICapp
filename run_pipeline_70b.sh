@@ -12,5 +12,5 @@ module load CUDA/12.1.1
 source .venv/bin/activate
 
 PYTHONUNBUFFERED=1 python run_pipeline.py \
-    --llm-model meta-llama/Meta-Llama-3.1-70B-Instruct \
-    --output-dir outputs_70b
+    --llm-model mistralai/Mixtral-8x7B-Instruct-v0.1 \
+    --output-dir outputs_mixtral

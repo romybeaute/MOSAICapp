@@ -11,6 +11,6 @@ module load CUDA/12.1.1
 
 source .venv/bin/activate
 
-python run_pipeline.py \
+PYTHONUNBUFFERED=1 python run_pipeline.py \
     --llm-model meta-llama/Meta-Llama-3.1-70B-Instruct \
     --output-dir outputs_70b

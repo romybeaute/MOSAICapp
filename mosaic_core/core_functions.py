@@ -120,6 +120,20 @@ def clean_label(raw):
     return text.strip() or "Unlabelled"
 
 
+_PRONOUN_RE = re.compile(
+    r'\b(I|me|my|mine|you|your|yours|we|our|ours|he|she|his|her|they|their|them)\b',
+    re.IGNORECASE,
+)
+
+def _label_is_valid(label: str) -> bool:
+    """Return False if label contains personal pronouns."""
+    if not label or label == "Unlabelled":
+        return False
+    if _PRONOUN_RE.search(label):
+        return False
+    return True
+
+
 # --- Config and caching utilities ---
 
 def get_config_hash(cfg):
@@ -423,7 +437,7 @@ Good label examples (use this style):
 - Encounter with deceased individuals or religious spirits
 - Heightened or unusually vivid senses
 - Sudden shift in life trajectory
-- Separation from and return to the body
+- Separation from the body
 - Sensation of moving through darkness or void
 - Overwhelming feeling of peace and warmth
 - Perception of a brilliant or divine light
@@ -499,31 +513,39 @@ def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3
         
         prompt = USER_TEMPLATE.format(documents=docs_block, keywords=keywords)
         
-        try:
-            out = client.chat_completion(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=24,
-                temperature=temperature,
-                stop=["\n"],
-            )
-            raw = out.choices[0].message.content
-            labels[int(tid)] = clean_label(raw)
-            
-        except Exception as e:
-            code = get_hf_status_code(e)
-            if code == 402:
-                raise RuntimeError(
-                    "HuggingFace returned 402 Payment Required. "
-                    "Monthly credits exhausted—upgrade or skip LLM labeling."
-                ) from e
-            resp = getattr(e, "response", None)
-            body = getattr(resp, "text", None) or getattr(resp, "content", None)
-            logger.warning(f"LLM labeling failed for topic {tid} (HTTP {code}): {e} | body: {body}")
-            labels[int(tid)] = f"Topic {tid}"
+        label = None
+        for attempt in range(2):
+            try:
+                out = client.chat_completion(
+                    model=model_id,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=24,
+                    temperature=temperature if attempt == 0 else 0.0,
+                    stop=["\n"],
+                )
+                raw = out.choices[0].message.content
+                candidate = clean_label(raw)
+                if _label_is_valid(candidate):
+                    label = candidate
+                    break
+                else:
+                    logger.warning(f"Topic {tid} attempt {attempt+1} invalid label: '{candidate}'")
+            except Exception as e:
+                code = get_hf_status_code(e)
+                if code == 402:
+                    raise RuntimeError(
+                        "HuggingFace returned 402 Payment Required. "
+                        "Monthly credits exhausted—upgrade or skip LLM labeling."
+                    ) from e
+                resp = getattr(e, "response", None)
+                body = getattr(resp, "text", None) or getattr(resp, "content", None)
+                logger.warning(f"LLM labeling failed for topic {tid} (HTTP {code}): {e} | body: {body}")
+                break
+
+        labels[int(tid)] = label if label else f"Topic {tid}"
     
     return labels
 

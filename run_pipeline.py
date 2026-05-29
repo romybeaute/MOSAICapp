@@ -18,7 +18,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Run topic modelling only, skip LLM labelling and plots")
 parser.add_argument("--output-dir", type=str, default="outputs", help="Directory for plots and HTML (default: outputs)")
-parser.add_argument("--llm-model", type=str, default="meta-llama/Meta-Llama-3-8B-Instruct", help="HuggingFace model ID for LLM labelling")
+parser.add_argument("--llm-model", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="HuggingFace model ID for LLM labelling")
 args = parser.parse_args()
 
 import matplotlib

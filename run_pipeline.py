@@ -98,33 +98,47 @@ log.info(f"Docs      → {DOCS_FILE}")
 log.info(f"Embeddings → {EMBEDDINGS_FILE}")
 
 # ── Step 1: Preprocess + Embed ────────────────────────────────────────────────
-log.info("Step 1 — preprocessing and embedding")
-
-docs, embeddings = preprocess_and_embed(
-    CSV_PATH,
-    model_name=EMBEDDING_MODEL,
-    text_col=TEXT_COL,
-    split_sentences=SPLIT_SENTENCES,
-    min_words=MIN_WORDS,
-    device=DEVICE,
-)
-
-np.save(EMBEDDINGS_FILE, embeddings)
-with open(DOCS_FILE, "w", encoding="utf-8") as f:
-    json.dump(docs, f)
-
-log.info(f"Embedded {len(docs)} sentences  →  shape {embeddings.shape}")
+if Path(DOCS_FILE).exists() and Path(EMBEDDINGS_FILE).exists():
+    log.info("Step 1 — loading cached docs and embeddings")
+    with open(DOCS_FILE, encoding="utf-8") as f:
+        docs = json.load(f)
+    embeddings = np.load(EMBEDDINGS_FILE)
+    log.info(f"Loaded {len(docs)} sentences  →  shape {embeddings.shape}")
+else:
+    log.info("Step 1 — preprocessing and embedding")
+    docs, embeddings = preprocess_and_embed(
+        CSV_PATH,
+        model_name=EMBEDDING_MODEL,
+        text_col=TEXT_COL,
+        split_sentences=SPLIT_SENTENCES,
+        min_words=MIN_WORDS,
+        device=DEVICE,
+    )
+    np.save(EMBEDDINGS_FILE, embeddings)
+    with open(DOCS_FILE, "w", encoding="utf-8") as f:
+        json.dump(docs, f)
+    log.info(f"Embedded {len(docs)} sentences  →  shape {embeddings.shape}")
 
 # ── Step 2: Topic modelling ───────────────────────────────────────────────────
-log.info("Step 2 — topic modelling")
-
 config_hash = get_config_hash(CONFIG)
-topic_model, reduced_2d, topics = run_topic_model(docs, embeddings, CONFIG)
+_topic_model_path = CACHE_DIR / "topic_model"
+_topics_path      = CACHE_DIR / "topics.json"
+_reduced_path     = CACHE_DIR / "reduced_2d.npy"
 
-topic_model.save(str(CACHE_DIR / "topic_model"))
-np.save(CACHE_DIR / "reduced_2d.npy", reduced_2d)
-with open(CACHE_DIR / "topics.json", "w") as f:
-    json.dump(topics, f)
+if _topic_model_path.exists() and _topics_path.exists() and _reduced_path.exists():
+    log.info("Step 2 — loading cached topic model")
+    from bertopic import BERTopic
+    topic_model = BERTopic.load(str(_topic_model_path))
+    with open(_topics_path) as f:
+        topics = json.load(f)
+    reduced_2d = np.load(_reduced_path)
+else:
+    log.info("Step 2 — topic modelling")
+    topic_model, reduced_2d, topics = run_topic_model(docs, embeddings, CONFIG)
+    topic_model.save(str(_topic_model_path))
+    np.save(_reduced_path, reduced_2d)
+    with open(_topics_path, "w") as f:
+        json.dump(topics, f)
 
 n_topics   = len(set(t for t in topics if t != -1))
 n_outliers = sum(1 for t in topics if t == -1)

@@ -400,18 +400,30 @@ Your task is to assign a concise label to a cluster of similar reports by identi
 shared lived experiential structure or process they describe.
 
 The label must:
-1. Describe what changes in experience itself (e.g. boundaries, temporality, embodiment, agency, affect, meaning).
+1. Name the specific experiential content — what is actually encountered, perceived, or undergone.
 2. Capture the underlying experiential process or structural transformation, not surface narrative details.
-3. Be specific and distinctive, but at the level of experiential structure rather than anecdotal content.
-4. Use phenomenological language that describes how cognitive, affective, or perceptual processes are lived, rather than analytic or evaluative abstractions.
+3. Be specific and distinctive: ground the label in the concrete experiential content of the cluster.
+4. Be written in plain, direct language — describe what happens in experience, not abstract structural categories.
 5. Be conceptually focused on a single dominant experiential pattern.
 6. Be concise and noun-phrase-like.
+
+Good label examples (use this style):
+- Encounter with a mystical being or presence
+- Encounter with deceased individuals or religious spirits
+- Heightened or unusually vivid senses
+- Sudden understanding or revelation
+- Feeling of leaving and returning to the body
+- Sensation of moving through darkness or void
+
+Bad label examples (avoid this style):
+- Epistemic restructuring of perceptual boundaries
+- Affective reorganisation of temporal self-continuity
+- Phenomenological dissolution of ego-structure
 
 Constraints:
 - Output ONLY the label (no explanation).
 - 3–8 words.
-- Avoid surface-specific details unless they reflect a recurring experiential structure.
-- Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, evaluation) unless they directly describe how the process is experienced.
+- Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, phenomenological) unless they directly name how the experience is lived.
 - Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
 - No punctuation, no quotes, no extra text.
 - Do not explain your reasoning.
@@ -424,7 +436,7 @@ USER_TEMPLATE = """Here is a cluster of participant reports describing a specifi
 Top keywords associated with this cluster:
 {keywords}
 
-Task: Return a single scientifically precise label (3–7 words). Output ONLY the label.
+Task: Return a single concrete, specific label (3–7 words) grounded in what participants actually experience. Output ONLY the label.
 """
 
 

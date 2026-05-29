@@ -161,6 +161,8 @@ labels = generate_llm_labels(
     max_docs_per_topic=10,
     doc_char_limit=600,
     temperature=0.2,
+    docs=docs,
+    topics=topics,
 )
 
 # Save to the exact path the app's cache lookup expects

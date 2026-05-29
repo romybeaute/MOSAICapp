@@ -352,7 +352,6 @@ def run_topic_model(docs, embeddings, config):
         vectorizer_model=vectorizer,
         top_n_words=bt_params.get("top_n_words", 10),
         nr_topics=nr_topics,
-        nr_repr_docs=10,
         verbose=False,
     )
     
@@ -460,27 +459,39 @@ def get_hf_status_code(exc):
 
 def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3-8B-Instruct",
                         max_topics=50, max_docs_per_topic=10, doc_char_limit=400,
-                        temperature=0.2):
+                        temperature=0.2, docs=None, topics=None):
     """
     Generate topic labels via HuggingFace Inference API.
-    
+
     Returns dict mapping topic_id to label string.
     Raises RuntimeError on 402 (payment required).
     """
     client = InferenceClient(model=model_id, token=hf_token)
-    
+
     info = topic_model.get_topic_info()
     info = info[info["Topic"] != -1].head(max_topics)
-    
+
+    # Build a lookup from topic_id -> list of docs for sampling more than 3 repr docs
+    topic_to_docs = {}
+    if docs is not None and topics is not None:
+        for doc, tid in zip(docs, topics):
+            if tid != -1:
+                topic_to_docs.setdefault(tid, []).append(doc)
+
     labels = {}
     logger.info(f"Generating LLM labels for {len(info)} topics")
-    
+
     for tid in info["Topic"].tolist():
         words = topic_model.get_topic(tid) or []
         keywords = ", ".join([w for w, _ in words[:10]])
-        
+
         try:
-            reps = (topic_model.get_representative_docs(tid) or [])[:max_docs_per_topic]
+            if topic_to_docs.get(tid):
+                import random
+                pool = topic_to_docs[tid]
+                reps = random.sample(pool, min(max_docs_per_topic, len(pool)))
+            else:
+                reps = (topic_model.get_representative_docs(tid) or [])[:max_docs_per_topic]
         except Exception:
             reps = []
         

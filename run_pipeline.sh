@@ -11,4 +11,4 @@ module load CUDA/12.1.1
 
 source .venv/bin/activate
 
-PYTHONUNBUFFERED=1 python run_pipeline.py
+PYTHONUNBUFFERED=1 python run_pipeline.py ${PIPELINE_ARGS:-}

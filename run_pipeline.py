@@ -229,7 +229,8 @@ log.info(f"Bar chart  →  {bar_path}")
 
 # 3. Topic info CSV — topics + LLM labels + sizes
 info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.get(t, ""))
-info_no_outliers.to_csv(PLOTS_DIR / "topic_info.csv", index=False)
+cols = ["Topic", "LLM_Label"] + [c for c in info_no_outliers.columns if c not in ("Topic", "LLM_Label")]
+info_no_outliers[cols].to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 log.info(f"Topic info →  {PLOTS_DIR / 'topic_info.csv'}")
 
 # 4. Interactive HTML — zoomable documents + topics scatter

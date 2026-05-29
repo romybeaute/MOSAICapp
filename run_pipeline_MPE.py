@@ -67,13 +67,13 @@ HF_TOKEN        = _load_secret("HF_TOKEN")
 
 CONFIG = {
     "umap_params": {
-        "n_neighbors": 15,
+        "n_neighbors": 13,
         "n_components": 10,
         "min_dist": 0.0,
     },
     "hdbscan_params": {
-        "min_cluster_size": 20,
-        "min_samples": 10,
+        "min_cluster_size": 11,
+        "min_samples": 21,
     },
     "use_vectorizer": True,
     "vectorizer_params": {

@@ -412,18 +412,24 @@ Good label examples (use this style):
 - Encounter with deceased individuals or religious spirits
 - Heightened or unusually vivid senses
 - Sudden understanding or revelation
-- Feeling of leaving and returning to the body
+- Separation from and return to the body
 - Sensation of moving through darkness or void
+- Overwhelming feeling of peace and warmth
 
 Bad label examples (avoid this style):
-- Epistemic restructuring of perceptual boundaries
-- Affective reorganisation of temporal self-continuity
-- Phenomenological dissolution of ego-structure
+- Epistemic restructuring of perceptual boundaries  ← jargon
+- Car hits and I remain  ← describes one report, uses "I"
+- You fill me with fear  ← uses "you", too spoken
+- Heard music or sounds suddenly  ← verb at start, not a noun phrase
+- Want to stay alive  ← direct quote style, too informal
 
 Constraints:
 - Output ONLY the label (no explanation).
 - 3–8 words.
-- Avoid meta-level analytic terms (e.g. epistemic, estimation, verification, phenomenological) unless they directly name how the experience is lived.
+- Always a noun phrase — never start with a verb or pronoun.
+- Never use first or second person (I, me, my, you, your, we).
+- The label must describe what is shared across the whole cluster, not one single report.
+- Avoid meta-level analytic terms (e.g. epistemic, phenomenological, affective) unless they directly name how the experience is lived.
 - Avoid generic wrappers such as "experience of", "state of", or "phenomenon of".
 - No punctuation, no quotes, no extra text.
 - Do not explain your reasoning.

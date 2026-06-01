@@ -57,7 +57,6 @@ TEXT_COLUMN_CANDIDATES = [
 ]
 
 UMAP_NC_MIN   = 5
-UMAP_NC_MAX   = 10
 UMAP_MIN_DIST = 0.0
 TOP_N_WORDS       = 10
 RANDOM_SEED       = 42
@@ -132,7 +131,7 @@ class OptunaSearchBERTopic:
                  split_sentences, min_words, condition, n_trials,
                  target_min, target_max,
                  mcs_min, mcs_max, ms_min, ms_max, nn_min, nn_max,
-                 subsample=None):
+                 nc_max=10, subsample=None):
         self.dataset         = dataset
         self.csv_path        = csv_path
         self.embedding_model = embedding_model
@@ -151,6 +150,7 @@ class OptunaSearchBERTopic:
         self.ms_max  = ms_max
         self.nn_min  = nn_min
         self.nn_max  = nn_max
+        self.nc_max  = nc_max
 
         self.project_root = Path(__file__).parent
         self.cache_dir    = get_cache_dir(self.project_root, self.dataset)
@@ -208,7 +208,7 @@ class OptunaSearchBERTopic:
             "min_cluster_size": trial.suggest_int("min_cluster_size", self.mcs_min, self.mcs_max),
             "min_samples":      trial.suggest_int("min_samples",      self.ms_min,  self.ms_max),
             "n_neighbors":      trial.suggest_int("n_neighbors",      self.nn_min,  self.nn_max),
-            "n_components":     trial.suggest_int("n_components",     UMAP_NC_MIN,  UMAP_NC_MAX),
+            "n_components":     trial.suggest_int("n_components",     UMAP_NC_MIN,  self.nc_max),
         }
 
     def objective(self, trial):
@@ -382,6 +382,10 @@ if __name__ == "__main__":
                         help="Search range for UMAP n_neighbors. "
                              "Lower = more local structure = more clusters. e.g. --n-neighbors 5 25")
 
+    # UMAP n_components range
+    parser.add_argument("--nc-max",          type=int, default=10,
+                        help="Max UMAP n_components to search (default 10, try 15 for large/diverse datasets)")
+
     # Target topic range — filter Pareto front in summary
     parser.add_argument("--target-min",      type=int, default=40,
                         help="Min acceptable number of topics")
@@ -407,6 +411,7 @@ if __name__ == "__main__":
         ms_max          = args.min_samples[1],
         nn_min          = args.n_neighbors[0],
         nn_max          = args.n_neighbors[1],
+        nc_max          = args.nc_max,
         subsample       = args.subsample,
     )
     search.run()

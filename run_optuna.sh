@@ -21,5 +21,6 @@ python run_optuna.py \
     --min-cluster-size 20 100 \
     --min-samples 10 70 \
     --n-neighbors 15 50 \
-    --target-min 35 \
-    --target-max 80
+    --condition t40_120 \
+    --target-min 40 \
+    --target-max 120

@@ -178,7 +178,7 @@ labels = generate_llm_labels(
 )
 
 # Save to the exact path the app's cache lookup expects
-llm_cache = labels_cache_path(CACHE_DIR, config_hash, LLM_MODEL)
+llm_cache = labels_cache_path(CACHE_DIR, config_hash, f"{LLM_MODEL}_repr{args.nr_repr_docs}")
 llm_cache.write_text(
     json.dumps({str(k): v for k, v in labels.items()}, indent=2),
     encoding="utf-8",

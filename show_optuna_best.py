@@ -41,7 +41,7 @@ best = (
     .drop_duplicates(subset=["min_cluster_size", "min_samples", "n_neighbors"])
     .head(args.top)
     [["trial", "emb_coherence", "n_topics", "outlier_pct",
-      "min_cluster_size", "min_samples", "n_neighbors"]]
+      "min_cluster_size", "min_samples", "n_neighbors", "n_components"]]
     .reset_index(drop=True)
 )
 
@@ -50,10 +50,15 @@ if best.empty:
     print("Try --max-outliers 60")
 else:
     best.index += 1
-    best.columns = ["trial", "emb_coh", "n_topics", "outliers%", "mcs", "ms", "nn"]
+    best.columns = ["trial", "emb_coh", "n_topics", "outliers%", "mcs", "ms", "nn", "nc"]
     best["emb_coh"] = best["emb_coh"].round(4)
     best["outliers%"] = best["outliers%"].round(1)
     print(best.to_string())
-    print(f"\nBest: trial {int(best.iloc[0]['trial'])} — "
-          f"mcs={int(best.iloc[0]['mcs'])}  ms={int(best.iloc[0]['ms'])}  nn={int(best.iloc[0]['nn'])}  "
-          f"→ {int(best.iloc[0]['n_topics'])} topics  {best.iloc[0]['outliers%']}% outliers")
+    r = best.iloc[0]
+    nc = int(r['nc']) if str(r['nc']) not in ('', 'nan') else '?'
+    print(f"\nBest: trial {int(r['trial'])} — "
+          f"mcs={int(r['mcs'])}  ms={int(r['ms'])}  nn={int(r['nn'])}  nc={nc}  "
+          f"→ {int(r['n_topics'])} topics  {r['outliers%']}% outliers")
+    print(f"\nTo run this config:")
+    print(f"  python run_pipeline_NDE_variant.py --mcs {int(r['mcs'])} --ms {int(r['ms'])} "
+          f"--nn {int(r['nn'])} --nc {nc} --tag best")

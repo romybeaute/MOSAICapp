@@ -285,6 +285,7 @@ class OptunaSearchBERTopic:
             "min_cluster_size": trial.params["min_cluster_size"],
             "min_samples":      trial.params["min_samples"],
             "n_neighbors":      trial.params["n_neighbors"],
+            "n_components":     trial.params.get("n_components", ""),
         }
         write_header = not self.results_csv.exists()
         with open(self.results_csv, "a", newline="") as f:

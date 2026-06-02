@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--mcs",        type=int, required=True, help="HDBSCAN min_cluster_size")
 parser.add_argument("--ms",         type=int, required=True, help="HDBSCAN min_samples")
 parser.add_argument("--nn",         type=int, required=True, help="UMAP n_neighbors")
+parser.add_argument("--nc",         type=int, default=10,    help="UMAP n_components (default 10)")
 parser.add_argument("--tag",        type=str, required=True, help="Short label for outputs (e.g. t87)")
 parser.add_argument("--debug",      action="store_true")
 parser.add_argument("--llm-model",  type=str, default="meta-llama/Llama-3.1-8B-Instruct")
@@ -69,7 +70,7 @@ HF_TOKEN        = _load_secret("HF_TOKEN")
 CONFIG = {
     "umap_params": {
         "n_neighbors": args.nn,
-        "n_components": 10,
+        "n_components": args.nc,
         "min_dist": 0.0,
     },
     "hdbscan_params": {

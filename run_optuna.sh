@@ -23,4 +23,4 @@ python run_optuna.py \
     --n-neighbors 15 50 \
     --nc-max 15 \
     --target-min 50 \
-    --target-max 120
+    --target-max 100

@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true", help="Run topic modelling only, skip LLM labelling and plots")
 parser.add_argument("--output-dir", type=str, default="outputs", help="Directory for plots and HTML (default: outputs)")
 parser.add_argument("--llm-model", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="HuggingFace model ID for LLM labelling")
-parser.add_argument("--nr-repr-docs", type=int, default=10, help="Number of representative docs per topic for LLM labelling")
+parser.add_argument("--nr-repr-docs", type=int, default=7, help="Number of representative docs per topic for LLM labelling")
 args = parser.parse_args()
 
 import matplotlib

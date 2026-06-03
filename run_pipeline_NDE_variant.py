@@ -25,8 +25,8 @@ parser.add_argument("--llm-model",       type=str, default="meta-llama/Llama-3.1
 parser.add_argument("--nr-repr-docs",    type=int, default=7)
 parser.add_argument("--reduce-outliers", action="store_true",
                     help="Reassign outlier sentences to nearest topic using embedding similarity")
-parser.add_argument("--outlier-threshold", type=float, default=0.1,
-                    help="Min cosine similarity to reassign an outlier (default 0.1)")
+parser.add_argument("--outlier-threshold", type=float, default=0.5,
+                    help="Min cosine similarity to reassign an outlier (default 0.5)")
 args = parser.parse_args()
 
 import matplotlib
@@ -150,7 +150,7 @@ if args.reduce_outliers:
         threshold=args.outlier_threshold,
     )
     topic_model.update_topics(docs, topics=new_topics)
-    topics = new_topics
+    topics = [int(t) for t in new_topics]  # convert numpy int64 → Python int
     n_outliers_new = sum(1 for t in topics if t == -1)
     log.info(f"After reduction — Outliers: {n_outliers_new} ({100*n_outliers_new/len(topics):.1f}%)  "
              f"(was {n_outliers}, reduced by {n_outliers - n_outliers_new})")

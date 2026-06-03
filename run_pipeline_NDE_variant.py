@@ -136,10 +136,20 @@ if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_
     from hdbscan import HDBSCAN as _HDBSCAN
     from bertopic import BERTopic
 
-    for _name in ["cuml", "cuml.manifold", "cuml.manifold.umap",
-                  "cuml.manifold.umap.umap", "cuml.cluster", "cuml.cluster.hdbscan"]:
+    def _mock_module(name):
+        mod = types.ModuleType(name)
+        mod.__path__ = []
+        mod.__spec__ = None
+        sys.modules[name] = mod
+        return mod
+
+    for _name in ["cuml", "cuml.common", "cuml.common.array",
+                  "cuml.manifold", "cuml.manifold.umap", "cuml.manifold.umap.umap",
+                  "cuml.cluster", "cuml.cluster.hdbscan",
+                  "cuml.neighbors", "cuml.metrics"]:
         if _name not in sys.modules:
-            sys.modules[_name] = types.ModuleType(_name)
+            _mock_module(_name)
+
     sys.modules["cuml.manifold.umap"].UMAP      = _UMAP
     sys.modules["cuml.manifold.umap.umap"].UMAP  = _UMAP
     sys.modules["cuml.cluster.hdbscan"].HDBSCAN  = _HDBSCAN

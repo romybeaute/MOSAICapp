@@ -20,6 +20,10 @@ parser.add_argument("--ms",         type=int, required=True, help="HDBSCAN min_s
 parser.add_argument("--nn",         type=int, required=True, help="UMAP n_neighbors")
 parser.add_argument("--nc",         type=int, default=10,    help="UMAP n_components (default 10)")
 parser.add_argument("--tag",        type=str, required=True, help="Short label for outputs (e.g. t87)")
+parser.add_argument("--base-tag",   type=str, default=None,
+                    help="Tag of the topic model to load (default: same as --tag). "
+                         "Use when running outlier reduction on an existing model, "
+                         "e.g. --tag t97_ro50 --base-tag t97")
 parser.add_argument("--debug",           action="store_true")
 parser.add_argument("--llm-model",       type=str, default="meta-llama/Llama-3.1-8B-Instruct")
 parser.add_argument("--nr-repr-docs",    type=int, default=7)
@@ -103,10 +107,14 @@ DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
 )
 
 # Variant-specific paths (never overwrites the main NDE topic model)
-config_hash       = get_config_hash(CONFIG)
-_topic_model_path = CACHE_DIR / f"topic_model_{args.tag}"
-_topics_path      = CACHE_DIR / f"topics_{args.tag}.json"
-_reduced_path     = CACHE_DIR / f"reduced_2d_{args.tag}.npy"
+config_hash = get_config_hash(CONFIG)
+_load_tag         = args.base_tag if args.base_tag else args.tag
+_topic_model_path = CACHE_DIR / f"topic_model_{_load_tag}"
+_topics_path      = CACHE_DIR / f"topics_{_load_tag}.json"
+_reduced_path     = CACHE_DIR / f"reduced_2d_{_load_tag}.npy"
+# Save outputs under the full tag (separate from the base model)
+_topics_save_path = CACHE_DIR / f"topics_{args.tag}.json"
+_reduced_save_path = CACHE_DIR / f"reduced_2d_{args.tag}.npy"
 
 # ── Step 1: Load cached embeddings (never re-embeds) ─────────────────────────
 if not Path(DOCS_FILE).exists() or not Path(EMBEDDINGS_FILE).exists():
@@ -131,9 +139,9 @@ if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_
 else:
     log.info("Step 2 — topic modelling")
     topic_model, reduced_2d, topics = run_topic_model(docs, embeddings, CONFIG)
-    topic_model.save(str(_topic_model_path))
-    np.save(_reduced_path, reduced_2d)
-    with open(_topics_path, "w") as f:
+    topic_model.save(str(CACHE_DIR / f"topic_model_{args.tag}"))
+    np.save(_reduced_save_path, reduced_2d)
+    with open(_topics_save_path, "w") as f:
         json.dump(topics, f)
 
 n_topics   = len(set(t for t in topics if t != -1))
@@ -154,8 +162,8 @@ if args.reduce_outliers:
     n_outliers_new = sum(1 for t in topics if t == -1)
     log.info(f"After reduction — Outliers: {n_outliers_new} ({100*n_outliers_new/len(topics):.1f}%)  "
              f"(was {n_outliers}, reduced by {n_outliers - n_outliers_new})")
-    # Save updated topics
-    with open(_topics_path, "w") as f:
+    # Save updated topics under the output tag
+    with open(_topics_save_path, "w") as f:
         json.dump(topics, f)
 
 # Re-extract representative docs

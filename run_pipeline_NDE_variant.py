@@ -20,9 +20,13 @@ parser.add_argument("--ms",         type=int, required=True, help="HDBSCAN min_s
 parser.add_argument("--nn",         type=int, required=True, help="UMAP n_neighbors")
 parser.add_argument("--nc",         type=int, default=10,    help="UMAP n_components (default 10)")
 parser.add_argument("--tag",        type=str, required=True, help="Short label for outputs (e.g. t87)")
-parser.add_argument("--debug",      action="store_true")
-parser.add_argument("--llm-model",  type=str, default="meta-llama/Llama-3.1-8B-Instruct")
-parser.add_argument("--nr-repr-docs", type=int, default=10)
+parser.add_argument("--debug",           action="store_true")
+parser.add_argument("--llm-model",       type=str, default="meta-llama/Llama-3.1-8B-Instruct")
+parser.add_argument("--nr-repr-docs",    type=int, default=7)
+parser.add_argument("--reduce-outliers", action="store_true",
+                    help="Reassign outlier sentences to nearest topic using embedding similarity")
+parser.add_argument("--outlier-threshold", type=float, default=0.1,
+                    help="Min cosine similarity to reassign an outlier (default 0.1)")
 args = parser.parse_args()
 
 import matplotlib
@@ -136,6 +140,24 @@ n_topics   = len(set(t for t in topics if t != -1))
 n_outliers = sum(1 for t in topics if t == -1)
 log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
+# ── Outlier reduction ─────────────────────────────────────────────────────────
+if args.reduce_outliers:
+    log.info(f"Reducing outliers — strategy=embeddings  threshold={args.outlier_threshold}")
+    new_topics = topic_model.reduce_outliers(
+        docs, topics,
+        strategy="embeddings",
+        embeddings=embeddings,
+        threshold=args.outlier_threshold,
+    )
+    topic_model.update_topics(docs, topics=new_topics)
+    topics = new_topics
+    n_outliers_new = sum(1 for t in topics if t == -1)
+    log.info(f"After reduction — Outliers: {n_outliers_new} ({100*n_outliers_new/len(topics):.1f}%)  "
+             f"(was {n_outliers}, reduced by {n_outliers - n_outliers_new})")
+    # Save updated topics
+    with open(_topics_path, "w") as f:
+        json.dump(topics, f)
+
 # Re-extract representative docs
 import pandas as _pd
 _documents_df = _pd.DataFrame({"Document": docs, "Topic": topics})
@@ -224,17 +246,19 @@ info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.g
 cols = ["Topic", "LLM_Label"] + [c for c in info_no_outliers.columns if c not in ("Topic", "LLM_Label")]
 info_no_outliers[cols].to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 
-# 3b. All sentences per topic — for condition comparison and app2.py
+# 3b. Topics summary — one row per topic (for condition comparison in app2.py)
+from collections import defaultdict as _dd
 import pandas as _pd2
 llm_map_full = {**name_map, **{int(k): v for k, v in labels.items()}}
-sentences_df = _pd2.DataFrame({
-    "Topic":      topics,
-    "Topic Name": [llm_map_full.get(t, "Unlabelled") if t != -1 else "Unlabelled" for t in topics],
-    "Document":   docs,
-})
-sentences_df = sentences_df[sentences_df["Topic"] != -1]
-sentences_df.to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
-log.info(f"All sentences →  {PLOTS_DIR / 'topics_sentences.csv'}")
+_topic_sents = _dd(list)
+for _t, _d in zip(topics, docs):
+    if _t != -1:
+        _topic_sents[_t].append(_d)
+_rows = [{"topic_name": llm_map_full.get(_t, f"Topic {_t}"),
+          "texts": " | ".join(_s), "n_sentences": len(_s)}
+         for _t, _s in sorted(_topic_sents.items())]
+_pd2.DataFrame(_rows).to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
+log.info(f"Topics summary →  {PLOTS_DIR / 'topics_sentences.csv'}")
 
 # 4. Interactive HTML
 try:

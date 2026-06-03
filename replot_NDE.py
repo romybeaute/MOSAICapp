@@ -1,16 +1,15 @@
 """
-Regenerate MPE plots from an edited topic_info.csv — no GPU, no model needed.
+Regenerate NDE plots from an edited topic_info.csv — no GPU, no model needed.
+Also generates topics_sentences.csv for condition comparison in app2.py.
 
 Usage:
-    python replot_MPE.py
-    python replot_MPE.py --topic-info data/MPE/output/outputs_MPE/topic_info.csv
-                         --output-dir data/MPE/output/outputs_MPE
+    python3 replot_NDE.py                         # defaults to t97
+    python3 replot_NDE.py --tag t78               # for the t78 variant
 
 Requires these files copied from Artemis:
-    data/MPE/preprocessed/cache/topics.json
-    data/MPE/preprocessed/cache/reduced_2d.npy
-    data/MPE/preprocessed/cache/*_docs.json
-    data/MPE/preprocessed/cache/topic_model/   (only for hierarchy plot)
+    data/NDE/preprocessed/cache/topics_<tag>.json
+    data/NDE/preprocessed/cache/reduced_2d_<tag>.npy
+    data/NDE/preprocessed/cache/*_docs.json
 """
 
 import argparse
@@ -24,21 +23,25 @@ import numpy as np
 import pandas as pd
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--topic-info", default="data/MPE/output/outputs_MPE/topic_info.csv")
-parser.add_argument("--output-dir", default="data/MPE/output/outputs_MPE")
-parser.add_argument("--cache-dir",  default="data/MPE/preprocessed/cache")
-parser.add_argument("--csv",        default="data/MPE/preprocessed/MPE_dataset_translated_batched.csv",
+parser.add_argument("--tag",        default="t97", help="Variant tag (t97, t78, etc.)")
+parser.add_argument("--output-dir", default=None,  help="Output dir (default: data/NDE/output/outputs_NDE_<tag>)")
+parser.add_argument("--cache-dir",  default="data/NDE/preprocessed/cache")
+parser.add_argument("--csv",        default="data/NDE/preprocessed/NDE_reports_grouped.csv",
                     help="Original CSV to count number of reports")
 args = parser.parse_args()
 
-DATASET_NAME = "MPE"
-PLOTS_DIR    = Path(args.output_dir)
+DATASET_NAME = "NDE"
 CACHE_DIR    = Path(args.cache_dir)
+PLOTS_DIR    = Path(args.output_dir) if args.output_dir else Path(f"data/NDE/output/outputs_NDE_{args.tag}")
+TOPIC_INFO   = PLOTS_DIR / "topic_info.csv"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
+if not TOPIC_INFO.exists():
+    raise FileNotFoundError(f"topic_info.csv not found at {TOPIC_INFO}")
+
 # ── Load edited labels from CSV ───────────────────────────────────────────────
-topic_info = pd.read_csv(args.topic_info)
-labels = dict(zip(topic_info["Topic"].astype(int), topic_info["LLM_Label"].astype(str)))
+topic_info = pd.read_csv(TOPIC_INFO)
+labels   = dict(zip(topic_info["Topic"].astype(int), topic_info["LLM_Label"].astype(str)))
 name_map = dict(zip(topic_info["Topic"].astype(int), topic_info["Name"].astype(str)))
 
 # ── Load cached data ──────────────────────────────────────────────────────────
@@ -49,10 +52,20 @@ if not docs_files:
 with open(docs_files[0], encoding="utf-8") as f:
     docs = json.load(f)
 
-with open(CACHE_DIR / "topics.json") as f:
+topics_file = CACHE_DIR / f"topics_{args.tag}.json"
+reduced_file = CACHE_DIR / f"reduced_2d_{args.tag}.npy"
+
+if not topics_file.exists():
+    raise FileNotFoundError(f"{topics_file} not found. Copy from Artemis:\n"
+                            f"  scp rb666@artemis:.../cache/topics_{args.tag}.json {CACHE_DIR}/")
+if not reduced_file.exists():
+    raise FileNotFoundError(f"{reduced_file} not found. Copy from Artemis:\n"
+                            f"  scp rb666@artemis:.../cache/reduced_2d_{args.tag}.npy {CACHE_DIR}/")
+
+with open(topics_file) as f:
     topics = json.load(f)
 
-reduced_2d = np.load(CACHE_DIR / "reduced_2d.npy")
+reduced_2d = np.load(reduced_file)
 
 n_topics    = len(set(t for t in topics if t != -1))
 n_outliers  = sum(1 for t in topics if t == -1)
@@ -61,8 +74,9 @@ n_reports   = len(pd.read_csv(args.csv)) if Path(args.csv).exists() else None
 print(f"Topics: {n_topics}  |  Sentences: {n_sentences}  |  Reports: {n_reports}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
 # ── Build per-doc label list ──────────────────────────────────────────────────
+llm_map_full = {**name_map, **labels}
 doc_labels = [
-    labels.get(t, name_map.get(t, "Unlabelled")) if t != -1 else "Unlabelled"
+    llm_map_full.get(t, "Unlabelled") if t != -1 else "Unlabelled"
     for t in topics
 ]
 
@@ -74,18 +88,18 @@ try:
         doc_labels,
         noise_label="Unlabelled",
         noise_color="#CCCCCC",
-        figsize=(24, 24),
+        figsize=(30, 30),
         dynamic_label_size=True,
-        dynamic_label_size_scaling_factor=1.2,
-        label_font_size=14,
+        dynamic_label_size_scaling_factor=0.9,
+        label_font_size=11,
         label_wrap_width=10,
-        label_margin_factor=5.0,
+        label_margin_factor=7.0,
         arrowprops={"arrowstyle": "-", "color": "#333333"},
     )
     subtitle = f"N = {n_sentences} sentences"
     if n_reports:
         subtitle += f", {n_reports} reports"
-    fig.suptitle(f"{DATASET_NAME}: MOSAIC Topic Map ({subtitle})", fontsize=20, y=0.99)
+    fig.suptitle(f"{DATASET_NAME} [{args.tag}]: MOSAIC Topic Map ({subtitle})", fontsize=20, y=0.99)
     fig.savefig(PLOTS_DIR / "topic_map.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"topic_map.png  →  {PLOTS_DIR}")
@@ -105,32 +119,45 @@ info_no_outliers = info_no_outliers.sort_values("Count", ascending=True)
 counts = info_no_outliers["Count"].values
 norm   = mcolors.LogNorm(vmin=counts.min(), vmax=counts.max())
 cmap   = cm.get_cmap("Purples")
-colors = [cmap(0.35 + 0.65 * norm(c)) for c in counts]  # log scale avoids one outlier dominating
+colors = [cmap(0.35 + 0.65 * norm(c)) for c in counts]
 
 fig, ax = plt.subplots(figsize=(10, max(6, len(info_no_outliers) * 0.38)))
-bars = ax.barh(info_no_outliers["Label"], counts, color=colors, edgecolor="white", linewidth=0.4)
-
+ax.barh(info_no_outliers["Label"], counts, color=colors, edgecolor="white", linewidth=0.4)
 ax.set_xlabel("Number of sentences", fontsize=11)
-ax.set_title(f"{DATASET_NAME}: Topic sizes ({n_topics} topics)", fontsize=13, pad=12)
+ax.set_title(f"{DATASET_NAME} [{args.tag}]: Topic sizes ({n_topics} topics)", fontsize=13, pad=12)
 ax.spines[["top", "right"]].set_visible(False)
 ax.tick_params(axis="y", labelsize=9)
-
-# Colourbar legend
 sm = cm.ScalarMappable(cmap=cmap, norm=mcolors.LogNorm(vmin=counts.min(), vmax=counts.max()))
 sm.set_array([])
 cbar = fig.colorbar(sm, ax=ax, pad=0.02, fraction=0.02)
 cbar.set_label("Sentences per topic", fontsize=9)
-
 plt.tight_layout()
 fig.savefig(PLOTS_DIR / "topic_sizes.png", dpi=200, bbox_inches="tight")
 plt.close(fig)
 print(f"topic_sizes.png  →  {PLOTS_DIR}")
 
-# ── 3. Updated topic_info CSV ─────────────────────────────────────────────────
+# ── 3. Save updated topic_info CSV (preserves your edits) ────────────────────
 topic_info.to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 print(f"topic_info.csv  →  {PLOTS_DIR}")
 
-# ── 4. Interactive HTML ───────────────────────────────────────────────────────
+# ── 4. Topics summary — one row per topic (for condition comparison in app2.py)
+from collections import defaultdict
+topic_to_sentences = defaultdict(list)
+for t, doc in zip(topics, docs):
+    if t != -1:
+        topic_to_sentences[t].append(doc)
+
+rows = []
+for tid, sents in sorted(topic_to_sentences.items()):
+    rows.append({
+        "topic_name": llm_map_full.get(tid, f"Topic {tid}"),
+        "texts":      " | ".join(sents),
+        "n_sentences": len(sents),
+    })
+pd.DataFrame(rows).to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
+print(f"topics_sentences.csv  →  {PLOTS_DIR}")
+
+# ── 5. Interactive HTML ───────────────────────────────────────────────────────
 try:
     import plotly.graph_objects as go
     import plotly.express as px
@@ -138,13 +165,12 @@ try:
     topic_assignments = np.array(topics)
     unique_topic_ids  = sorted(set(topic_assignments.tolist()))
     palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
-    llm_map = {**name_map, **labels}
 
     doc_fig = go.Figure()
     for tid in unique_topic_ids:
         mask  = np.where(topic_assignments == tid)[0]
         x, y  = reduced_2d[mask, 0], reduced_2d[mask, 1]
-        label = "Unlabelled" if tid == -1 else llm_map.get(tid, f"Topic {tid}")
+        label = "Unlabelled" if tid == -1 else llm_map_full.get(tid, f"Topic {tid}")
         color = "#CCCCCC" if tid == -1 else palette[tid % len(palette)]
         size, opacity = (4, 0.4) if tid == -1 else (6, 0.75)
         hover = [f"<b>{label}</b><br><br>{docs[i][:300]}{'…' if len(docs[i]) > 300 else ''}" for i in mask]
@@ -155,7 +181,7 @@ try:
         ))
 
     doc_fig.update_layout(
-        title=dict(text=f"<b>{DATASET_NAME}: Documents and Topics</b>", x=0.5, xanchor="center"),
+        title=dict(text=f"<b>{DATASET_NAME} [{args.tag}]: Documents and Topics</b>", x=0.5, xanchor="center"),
         template="simple_white",
         xaxis=dict(visible=False), yaxis=dict(visible=False),
         height=900, margin=dict(l=10, r=10, t=60, b=10),
@@ -167,7 +193,7 @@ try:
 except Exception as e:
     print(f"Interactive HTML failed: {e}")
 
-# ── 5. Hierarchy plot — computed directly from keywords, no model needed ─────
+# ── 6. Hierarchy plot ─────────────────────────────────────────────────────────
 try:
     import ast
     from sklearn.feature_extraction.text import TfidfVectorizer
@@ -175,8 +201,8 @@ try:
     from scipy.cluster.hierarchy import linkage
     import plotly.figure_factory as ff
 
-    info_hier = topic_info[topic_info["Topic"] != -1].copy()
-    hier_labels = [labels.get(int(t), f"Topic {t}") for t in info_hier["Topic"]]
+    info_hier    = topic_info[topic_info["Topic"] != -1].copy()
+    hier_labels  = [labels.get(int(t), f"Topic {t}") for t in info_hier["Topic"]]
 
     def _parse_repr(r):
         try:
@@ -185,18 +211,14 @@ try:
             return str(r)
 
     keyword_docs = [_parse_repr(r) for r in info_hier["Representation"]]
-
     X = normalize(TfidfVectorizer().fit_transform(keyword_docs).toarray())
     Z = linkage(X, method="ward", metric="euclidean")
 
     hier_fig = ff.create_dendrogram(
-        X,
-        labels=hier_labels,
-        linkagefun=lambda x: Z,
-        orientation="left",
+        X, labels=hier_labels, linkagefun=lambda x: Z, orientation="left",
     )
     hier_fig.update_layout(
-        title=dict(text=f"<b>{DATASET_NAME}: Topic Hierarchy</b>", x=0.5, xanchor="center"),
+        title=dict(text=f"<b>{DATASET_NAME} [{args.tag}]: Topic Hierarchy</b>", x=0.5, xanchor="center"),
         height=max(600, len(hier_labels) * 22),
         margin=dict(l=320, r=50, t=60, b=50),
         template="simple_white",

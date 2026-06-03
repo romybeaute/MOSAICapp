@@ -131,7 +131,19 @@ log.info(f"Loaded {len(docs)} sentences  →  shape {embeddings.shape}")
 # ── Step 2: Topic modelling ───────────────────────────────────────────────────
 if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_path).exists():
     log.info("Step 2 — loading cached topic model for this variant")
+    import sys, types
+    from umap import UMAP as _UMAP
+    from hdbscan import HDBSCAN as _HDBSCAN
     from bertopic import BERTopic
+
+    for _name in ["cuml", "cuml.manifold", "cuml.manifold.umap",
+                  "cuml.manifold.umap.umap", "cuml.cluster", "cuml.cluster.hdbscan"]:
+        if _name not in sys.modules:
+            sys.modules[_name] = types.ModuleType(_name)
+    sys.modules["cuml.manifold.umap"].UMAP      = _UMAP
+    sys.modules["cuml.manifold.umap.umap"].UMAP  = _UMAP
+    sys.modules["cuml.cluster.hdbscan"].HDBSCAN  = _HDBSCAN
+
     topic_model = BERTopic.load(str(_topic_model_path))
     with open(_topics_path) as f:
         topics = json.load(f)

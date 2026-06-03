@@ -171,8 +171,6 @@ if args.reduce_outliers:
     n_outliers_new = sum(1 for t in topics if t == -1)
     log.info(f"After reduction — Outliers: {n_outliers_new} ({100*n_outliers_new/len(topics):.1f}%)  "
              f"(was {n_outliers}, reduced by {n_outliers - n_outliers_new})")
-    with open(_topics_path, "w") as f:
-        json.dump(topics, f)
 
 # Re-extract representative docs with configured count
 import pandas as _pd

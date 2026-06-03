@@ -136,23 +136,28 @@ if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_
     from hdbscan import HDBSCAN as _HDBSCAN
     from bertopic import BERTopic
 
-    def _mock_module(name):
-        mod = types.ModuleType(name)
-        mod.__path__ = []
-        mod.__spec__ = None
-        sys.modules[name] = mod
-        return mod
+    class _CumlFinder:
+        @classmethod
+        def find_module(cls, name, path=None):
+            if name == "cuml" or name.startswith("cuml."):
+                return cls
+        @classmethod
+        def load_module(cls, name):
+            if name in sys.modules:
+                return sys.modules[name]
+            mod = types.ModuleType(name)
+            mod.__path__ = []
+            mod.__spec__ = None
+            mod.__loader__ = cls
+            sys.modules[name] = mod
+            return mod
 
-    for _name in ["cuml", "cuml.common", "cuml.common.array",
-                  "cuml.manifold", "cuml.manifold.umap", "cuml.manifold.umap.umap",
-                  "cuml.cluster", "cuml.cluster.hdbscan",
-                  "cuml.neighbors", "cuml.metrics"]:
-        if _name not in sys.modules:
-            _mock_module(_name)
+    sys.meta_path.insert(0, _CumlFinder)
 
-    sys.modules["cuml.manifold.umap"].UMAP      = _UMAP
-    sys.modules["cuml.manifold.umap.umap"].UMAP  = _UMAP
-    sys.modules["cuml.cluster.hdbscan"].HDBSCAN  = _HDBSCAN
+    import cuml.manifold.umap, cuml.manifold.umap.umap, cuml.cluster.hdbscan
+    cuml.manifold.umap.UMAP            = _UMAP
+    cuml.manifold.umap.umap.UMAP       = _UMAP
+    cuml.cluster.hdbscan.HDBSCAN       = _HDBSCAN
 
     topic_model = BERTopic.load(str(_topic_model_path))
     with open(_topics_path) as f:

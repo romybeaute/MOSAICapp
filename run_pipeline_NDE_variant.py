@@ -224,6 +224,18 @@ info_no_outliers["LLM_Label"] = info_no_outliers["Topic"].map(lambda t: labels.g
 cols = ["Topic", "LLM_Label"] + [c for c in info_no_outliers.columns if c not in ("Topic", "LLM_Label")]
 info_no_outliers[cols].to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 
+# 3b. All sentences per topic — for condition comparison and app2.py
+import pandas as _pd2
+llm_map_full = {**name_map, **{int(k): v for k, v in labels.items()}}
+sentences_df = _pd2.DataFrame({
+    "Topic":      topics,
+    "Topic Name": [llm_map_full.get(t, "Unlabelled") if t != -1 else "Unlabelled" for t in topics],
+    "Document":   docs,
+})
+sentences_df = sentences_df[sentences_df["Topic"] != -1]
+sentences_df.to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
+log.info(f"All sentences →  {PLOTS_DIR / 'topics_sentences.csv'}")
+
 # 4. Interactive HTML
 try:
     import plotly.graph_objects as go

@@ -737,7 +737,7 @@ def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model
         verbose=False,
     )
     topics, _ = topic_model.fit_transform(list(_docs), np.asarray(_embeddings))
-    return topics, topic_model.get_topic_info()
+    return topics, topic_model.get_topic_info(), topic_model
 
 
 # =====================================================================
@@ -1145,6 +1145,22 @@ st.sidebar.markdown("---")
 # Embedding model & device
 # ---------------------------------------------------------------------
 
+ALL_EMBEDDING_MODELS = (
+    "BAAI/bge-small-en-v1.5",
+    "intfloat/multilingual-e5-large-instruct",
+    "Qwen/Qwen3-Embedding-0.6B",
+    "Qwen/Qwen3-Embedding-4B",
+    "sentence-transformers/all-mpnet-base-v2",
+)
+
+def _detect_model_from_filename(filename: str) -> str | None:
+    """Return the first known model whose sanitized name appears in the filename."""
+    for model in ALL_EMBEDDING_MODELS:
+        safe = re.sub(r"[^a-zA-Z0-9_-]", "_", model)
+        if safe in filename:
+            return model
+    return None
+
 st.sidebar.header("Model Selection")
 
 selected_embedding_model = st.sidebar.selectbox(
@@ -1548,6 +1564,21 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 "Documents file (.json) — list of strings", type=["json"], key="sa_zs_docs"
             )
 
+            # Auto-detect the embedding model from the filename; let the user override.
+            _auto_model = _detect_model_from_filename(sa_npy.name if sa_npy else "")
+            _default_idx = list(ALL_EMBEDDING_MODELS).index(_auto_model) if _auto_model else 0
+            sa_embedding_model = st.selectbox(
+                "Embedding model (must match the model used to generate the .npy file)",
+                ALL_EMBEDDING_MODELS,
+                index=_default_idx,
+                key="sa_zs_emb_model",
+                help="Auto-detected from the filename when possible. Change if detection is wrong.",
+            )
+            if _auto_model:
+                st.caption(f"Auto-detected from filename: `{_auto_model}`")
+            else:
+                st.warning("Could not auto-detect the embedding model from the filename. Please select the correct model above.")
+
             sa_zs_categories_raw = st.text_area(
                 "Categories — one per line",
                 value=_ZS_DEFAULT_CATEGORIES,
@@ -1574,6 +1605,7 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 try:
                     sa_embeddings = np.load(sa_npy)
                     sa_docs_list = json.load(sa_docs_json)
+                    sa_docs_list = [str(d) if (d is not None and d != "") else "[empty]" for d in sa_docs_list]
                 except Exception as e:
                     st.error(f"Could not load files: {e}")
                     st.stop()
@@ -1584,18 +1616,217 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 with st.spinner("Running zero-shot classification…"):
                     sa_zs_topics, sa_zs_topic_info, _ = run_zeroshot(
                         sa_docs_list, sa_embeddings, tuple(sa_categories),
-                        sa_zs_min_sim, selected_embedding_model,
+                        sa_zs_min_sim, sa_embedding_model,
                         dataset_key=f"standalone_{len(sa_docs_list)}",
                     )
-                st.session_state["sa_zs_results"] = (sa_zs_topics, sa_zs_topic_info, sa_categories)
+                st.session_state["sa_zs_results"] = (sa_zs_topics, sa_zs_topic_info, sa_categories, sa_docs_list)
+                st.session_state["sa_zs_min_sim"] = sa_zs_min_sim
 
             if "sa_zs_results" in st.session_state:
-                sa_zs_topics, sa_zs_topic_info, sa_categories = st.session_state["sa_zs_results"]
-                st.success(f"Classified into {sa_zs_topic_info['Topic'].nunique()} categories.")
-                st.dataframe(
-                    sa_zs_topic_info[["Topic", "Count", "Name"]].set_index("Topic"),
+                _sa_zs_state = st.session_state["sa_zs_results"]
+                if len(_sa_zs_state) == 4:
+                    sa_zs_topics, sa_zs_topic_info, sa_categories, sa_docs_list = _sa_zs_state
+                else:
+                    sa_zs_topics, sa_zs_topic_info, sa_categories = _sa_zs_state
+                    sa_docs_list = []
+                if not sa_docs_list or len(sa_docs_list) != len(sa_zs_topics):
+                    st.warning("Session data mismatch — please re-run the classification.")
+                    st.stop()
+
+                sa_total_zs = len(sa_zs_topics)
+                sa_classified_zs = sum(1 for t in sa_zs_topics if t != -1)
+                sa_unclassified_zs = sa_total_zs - sa_classified_zs
+
+                sa_zm1, sa_zm2, sa_zm3 = st.columns(3)
+                sa_zm1.metric("Total documents", f"{sa_total_zs:,}")
+                sa_zm2.metric("Classified", f"{sa_classified_zs:,} ({100*sa_classified_zs/sa_total_zs:.1f}%)")
+                sa_zm3.metric("Unclassified", f"{sa_unclassified_zs:,} ({100*sa_unclassified_zs/sa_total_zs:.1f}%)")
+
+                sa_zs_name_map = sa_zs_topic_info.set_index("Topic")["Name"].to_dict()
+                sa_zs_df = pd.DataFrame({"sentence": sa_docs_list, "topic_id": sa_zs_topics})
+                sa_zs_df["category"] = sa_zs_df["topic_id"].map(sa_zs_name_map).fillna("Unclassified")
+
+                sa_zs_plot_df = (
+                    sa_zs_topic_info[sa_zs_topic_info["Topic"] != -1]
+                    .sort_values("Count", ascending=True)
+                    .reset_index(drop=True)
+                )
+
+                if not sa_zs_plot_df.empty:
+                    st.subheader("Distribution across categories")
+                    import matplotlib.cm as _cm
+                    import matplotlib.colors as _mcolors
+                    _norm = _mcolors.Normalize(vmin=sa_zs_plot_df["Count"].min(), vmax=sa_zs_plot_df["Count"].max())
+                    _cmap = _cm.get_cmap("Purples")
+                    _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in sa_zs_plot_df["Count"]]
+                    fig_sa_zs, ax_sa_zs = plt.subplots(figsize=(10, max(4, len(sa_zs_plot_df) * 0.62)))
+                    fig_sa_zs.patch.set_facecolor("white")
+                    ax_sa_zs.set_facecolor("#f8f9fa")
+                    bars = ax_sa_zs.barh(sa_zs_plot_df["Name"], sa_zs_plot_df["Count"], color=_bar_colors, edgecolor="white", linewidth=0.8, height=0.65)
+                    _max_count = sa_zs_plot_df["Count"].max()
+                    for bar in bars:
+                        w = bar.get_width()
+                        ax_sa_zs.text(w + _max_count * 0.015, bar.get_y() + bar.get_height() / 2, str(int(w)), va="center", ha="left", fontsize=9, color="#333333", fontweight="bold")
+                    for spine in ("top", "right"):
+                        ax_sa_zs.spines[spine].set_visible(False)
+                    ax_sa_zs.set_xlabel("Number of sentences", fontsize=10, color="#555555")
+                    ax_sa_zs.invert_yaxis()
+                    ax_sa_zs.grid(axis="x", color="#e0e0e0", linewidth=0.8, zorder=0)
+                    ax_sa_zs.set_axisbelow(True)
+                    ax_sa_zs.set_title(f"Zero-Shot Classification  ·  {sa_classified_zs:,} / {sa_total_zs:,} sentences classified", fontsize=11, color="#333333", pad=12)
+                    plt.tight_layout(pad=1.5)
+                    st.pyplot(fig_sa_zs)
+                    _buf_sa_zs = BytesIO()
+                    fig_sa_zs.savefig(_buf_sa_zs, format="png", dpi=200, bbox_inches="tight")
+                    st.download_button("Download bar chart (PNG)", data=_buf_sa_zs.getvalue(), file_name="zeroshot_barchart.png", mime="image/png")
+                    plt.close(fig_sa_zs)
+
+                st.subheader("Sentences per category")
+                for _, row_sa_zs in sa_zs_plot_df.sort_values("Count", ascending=False).iterrows():
+                    cat_name = row_sa_zs["Name"]
+                    count_sa_zs = row_sa_zs["Count"]
+                    with st.expander(f"{cat_name}  ({count_sa_zs} sentences)"):
+                        cat_sentences = sa_zs_df[sa_zs_df["category"] == cat_name]["sentence"].reset_index(drop=True)
+                        n_show = st.slider("Sentences to show", 5, min(100, len(cat_sentences)), 10, key=f"sa_zs_show_{cat_name}")
+                        st.dataframe(cat_sentences.head(n_show).to_frame("sentence"), use_container_width=True)
+
+                with st.expander(f"Unclassified  ({sa_unclassified_zs} sentences)"):
+                    unclass = sa_zs_df[sa_zs_df["category"] == "Unclassified"]["sentence"].reset_index(drop=True)
+                    st.dataframe(unclass.head(50).to_frame("sentence"), use_container_width=True)
+
+                st.download_button(
+                    "Download full classification results (CSV)",
+                    data=sa_zs_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="zeroshot_standalone.csv",
+                    mime="text/csv",
                     use_container_width=True,
                 )
+
+                # ── 2D Scatter plot ───────────────────────────────────────────
+                _reduced_path = CACHE_DIR / "reduced_2d.npy"
+                _topics_path  = CACHE_DIR / "topics.json"
+                _llm_label_files = sorted(CACHE_DIR.glob("llm_labels_*.json"))
+
+                if _reduced_path.exists():
+                    _reduced_2d = np.load(_reduced_path)
+                    if _reduced_2d.shape[0] == len(sa_zs_topics):
+                        st.subheader("2D Map — coloured by zero-shot category")
+                        import plotly.graph_objects as go
+                        import plotly.express as px
+                        _cat_list = [sa_zs_name_map.get(t, "Unclassified") for t in sa_zs_topics]
+                        _unique_cats = ["Unclassified"] + [c for c in sorted(set(_cat_list)) if c != "Unclassified"]
+                        _palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
+                        _scatter_fig = go.Figure()
+                        for _i, _cat in enumerate(_unique_cats):
+                            _mask = [j for j, c in enumerate(_cat_list) if c == _cat]
+                            _color  = "#CCCCCC" if _cat == "Unclassified" else _palette[(_i - 1) % len(_palette)]
+                            _opacity = 0.25 if _cat == "Unclassified" else 0.75
+                            _size    = 3 if _cat == "Unclassified" else 5
+                            _scatter_fig.add_trace(go.Scattergl(
+                                x=_reduced_2d[_mask, 0], y=_reduced_2d[_mask, 1],
+                                mode="markers", name=_cat,
+                                marker=dict(color=_color, size=_size, opacity=_opacity),
+                                text=[sa_docs_list[j][:200] for j in _mask],
+                                hoverinfo="text+name",
+                            ))
+                        _scatter_fig.update_layout(
+                            height=700, template="simple_white",
+                            xaxis=dict(visible=False), yaxis=dict(visible=False),
+                            title=dict(text="<b>Documents coloured by zero-shot category</b>", x=0.5, xanchor="center"),
+                            legend=dict(title="Category", bgcolor="rgba(255,255,255,0.9)", bordercolor="#dddddd", borderwidth=1, font=dict(size=10)),
+                            margin=dict(l=10, r=10, t=60, b=10),
+                        )
+                        st.plotly_chart(_scatter_fig, use_container_width=True)
+
+                # ── BERTopic cross-reference ──────────────────────────────────
+                # Search all dataset caches for a topics.json matching the uploaded doc count
+                _n_docs = len(sa_zs_topics)
+                _matched_cache = None
+                for _candidate in (Path(__file__).parent / "data").glob("*/preprocessed/cache/topics.json"):
+                    try:
+                        with open(_candidate) as _f:
+                            _candidate_topics = json.load(_f)
+                        if len(_candidate_topics) == _n_docs:
+                            _matched_cache = _candidate.parent
+                            break
+                    except Exception:
+                        continue
+
+                if _matched_cache is None:
+                    st.info("BERTopic cross-reference not available — no matching `topics.json` found. Run the full pipeline on this dataset first.")
+                else:
+                    _topics_path  = _matched_cache / "topics.json"
+                    _llm_label_files = sorted(_matched_cache.glob("llm_labels_*.json"))
+                    with open(_topics_path) as _f:
+                        _bt_topics = json.load(_f)
+                    _llm_labels_xref = {}
+                    if _llm_label_files:
+                        with open(_llm_label_files[-1]) as _f:
+                            _llm_labels_xref = {int(k): v for k, v in json.load(_f).items()}
+                    else:
+                        st.caption("No LLM labels found — showing topic numbers. Run the full pipeline with LLM labelling for better labels.")
+                    if len(_bt_topics) == _n_docs:
+                        _sa_zs_threshold = st.session_state.get("sa_zs_min_sim", "?")
+                        st.subheader("BERTopic × Zero-Shot cross-reference")
+                        st.caption(f"Each row shows how a BERTopic topic distributes across your zero-shot categories (rows sum to 100%). Similarity threshold: {_sa_zs_threshold}. '% unclassified' = sentences below threshold not assigned to any category.")
+                        _xref_df = pd.DataFrame({
+                            "category": [sa_zs_name_map.get(t, "Unclassified") for t in sa_zs_topics],
+                            "bt_topic": _bt_topics,
+                        })
+                        _xref_df["bt_label"] = _xref_df["bt_topic"].map(
+                            lambda t: _llm_labels_xref.get(t, f"Topic {t}") if t != -1 else "Outlier"
+                        )
+
+                        # Heatmap: % of each BERTopic topic that falls into each zero-shot category
+                        # Replace zero-shot outlier topic name with "Unclassified"
+                        _zs_outlier_name = sa_zs_name_map.get(-1)
+                        if _zs_outlier_name:
+                            _xref_df.loc[_xref_df["category"] == _zs_outlier_name, "category"] = "Unclassified"
+
+                        _crosstab_full = pd.crosstab(
+                            _xref_df["bt_label"], _xref_df["category"], normalize="index"
+                        ) * 100
+                        # Keep % unclassified as a separate column, remove the outlier name column
+                        _pct_unclassified = _crosstab_full.get("Unclassified", pd.Series(0, index=_crosstab_full.index))
+                        _crosstab = _crosstab_full.drop(columns="Unclassified", errors="ignore")
+                        _crosstab["% unclassified"] = _pct_unclassified.values
+
+                        import plotly.graph_objects as _go_xref
+                        _heat_fig = _go_xref.Figure(data=_go_xref.Heatmap(
+                            z=_crosstab.values,
+                            x=list(_crosstab.columns),
+                            y=list(_crosstab.index),
+                            colorscale= "dense",#"bupu",
+                            text=[[f"{v:.1f}%" for v in row] for row in _crosstab.values],
+                            texttemplate="%{text}",
+                            hovertemplate="BERTopic: %{y}<br>Category: %{x}<br>%{text}<extra></extra>",
+                            colorbar=dict(title="% of topic"),
+                        ))
+                        _heat_fig.update_layout(
+                            height=max(400, len(_crosstab) * 28),
+                            xaxis=dict(title="Zero-shot category", tickangle=-30, side="bottom"),
+                            yaxis=dict(title="BERTopic topic", autorange="reversed"),
+                            margin=dict(l=10, r=10, t=30, b=120),
+                        )
+                        st.plotly_chart(_heat_fig, use_container_width=True)
+                        try:
+                            _heat_img = _heat_fig.to_image(format="png", scale=2)
+                            st.download_button("Download heatmap (PNG)", data=_heat_img, file_name="zeroshot_heatmap.png", mime="image/png")
+                        except Exception:
+                            st.caption("Install `kaleido` to enable heatmap download: `pip install kaleido`")
+
+                        st.caption("Per zero-shot category: top BERTopic topics inside it")
+                        for _, _row_xref in sa_zs_plot_df.sort_values("Count", ascending=False).iterrows():
+                            _cat_xref = _row_xref["Name"]
+                            with st.expander(f"{_cat_xref}"):
+                                _top_bt = (
+                                    _xref_df[_xref_df["category"] == _cat_xref]
+                                    .groupby("bt_label").size()
+                                    .sort_values(ascending=False).head(10)
+                                    .reset_index()
+                                )
+                                _top_bt.columns = ["BERTopic Label", "Count"]
+                                st.dataframe(_top_bt, use_container_width=True, hide_index=True)
 
         with sa_cond_tab:
             st.subheader("Condition Comparison — Semantic Similarity")

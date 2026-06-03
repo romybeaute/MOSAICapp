@@ -28,9 +28,12 @@ parser.add_argument("--debug",           action="store_true")
 parser.add_argument("--llm-model",       type=str, default="meta-llama/Llama-3.1-8B-Instruct")
 parser.add_argument("--nr-repr-docs",    type=int, default=7)
 parser.add_argument("--reduce-outliers", action="store_true",
-                    help="Reassign outlier sentences to nearest topic using embedding similarity")
+                    help="Reassign outlier sentences to nearest topic")
 parser.add_argument("--outlier-threshold", type=float, default=0.5,
-                    help="Min cosine similarity to reassign an outlier (default 0.5)")
+                    help="Min similarity to reassign an outlier (default 0.5)")
+parser.add_argument("--outlier-strategy", type=str, default="c-tf-idf",
+                    choices=["embeddings", "c-tf-idf", "distributions"],
+                    help="Strategy for outlier reduction (default: c-tf-idf, GPU-free)")
 args = parser.parse_args()
 
 import matplotlib
@@ -150,12 +153,14 @@ log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(to
 
 # ── Outlier reduction ─────────────────────────────────────────────────────────
 if args.reduce_outliers:
-    log.info(f"Reducing outliers — strategy=embeddings  threshold={args.outlier_threshold}")
+    log.info(f"Reducing outliers — strategy={args.outlier_strategy}  threshold={args.outlier_threshold}")
+    kwargs = dict(threshold=args.outlier_threshold)
+    if args.outlier_strategy == "embeddings":
+        kwargs["embeddings"] = embeddings
     new_topics = topic_model.reduce_outliers(
         docs, topics,
-        strategy="embeddings",
-        embeddings=embeddings,
-        threshold=args.outlier_threshold,
+        strategy=args.outlier_strategy,
+        **kwargs,
     )
     topic_model.update_topics(docs, topics=new_topics)
     topics = [int(t) for t in new_topics]  # convert numpy int64 → Python int

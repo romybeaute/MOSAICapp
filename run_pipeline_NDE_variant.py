@@ -128,137 +128,115 @@ with open(DOCS_FILE, encoding="utf-8") as f:
 embeddings = np.load(EMBEDDINGS_FILE)
 log.info(f"Loaded {len(docs)} sentences  →  shape {embeddings.shape}")
 
-# ── Step 2: Topic modelling ───────────────────────────────────────────────────
-if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_path).exists():
-    log.info("Step 2 — loading cached topic model for this variant")
-    import sys, types
-    from umap import UMAP as _UMAP
-    from hdbscan import HDBSCAN as _HDBSCAN
-    from bertopic import BERTopic
+import pandas as _pd
+from sklearn.metrics.pairwise import cosine_similarity as _cos_sim
 
-    class _CumlFinder:
-        @classmethod
-        def find_module(cls, name, path=None):
-            if name == "cuml" or name.startswith("cuml."):
-                return cls
-        @classmethod
-        def load_module(cls, name):
-            if name in sys.modules:
-                return sys.modules[name]
-            mod = types.ModuleType(name)
-            mod.__path__ = []
-            mod.__spec__ = None
-            mod.__loader__ = cls
-            sys.modules[name] = mod
-            return mod
-
-    sys.meta_path.insert(0, _CumlFinder)
-
-    import cuml.manifold.umap, cuml.manifold.umap.umap, cuml.cluster.hdbscan
-    cuml.manifold.umap.UMAP            = _UMAP
-    cuml.manifold.umap.umap.UMAP       = _UMAP
-    cuml.cluster.hdbscan.HDBSCAN       = _HDBSCAN
-
-    topic_model = BERTopic.load(str(_topic_model_path))
+if args.reduce_outliers:
+    # ── Outlier reduction mode: no model loading needed ───────────────────────
+    if not (Path(_topics_path).exists() and Path(_reduced_path).exists()):
+        raise FileNotFoundError(f"topics_{_load_tag}.json or reduced_2d_{_load_tag}.npy not found.")
     with open(_topics_path) as f:
         topics = json.load(f)
     reduced_2d = np.load(_reduced_path)
-else:
-    log.info("Step 2 — topic modelling")
-    topic_model, reduced_2d, topics = run_topic_model(docs, embeddings, CONFIG)
-    topic_model.save(str(CACHE_DIR / f"topic_model_{args.tag}"))
-    np.save(_reduced_save_path, reduced_2d)
-    with open(_topics_save_path, "w") as f:
-        json.dump(topics, f)
 
-n_topics   = len(set(t for t in topics if t != -1))
-n_outliers = sum(1 for t in topics if t == -1)
-log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
+    n_topics   = len(set(t for t in topics if t != -1))
+    n_outliers = sum(1 for t in topics if t == -1)
+    log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
-# ── Outlier reduction ─────────────────────────────────────────────────────────
-if args.reduce_outliers:
-    log.info(f"Reducing outliers — strategy=embeddings (custom numpy)  threshold={args.outlier_threshold}")
-    from sklearn.metrics.pairwise import cosine_similarity as _cos_sim
-
-    # Build topic centroids from scratch using numpy (avoids cuML internals)
-    topic_ids = sorted(set(t for t in topics if t != -1))
-    topic_assignments = np.array(topics)
-    centroids = np.vstack([
-        embeddings[topic_assignments == tid].mean(axis=0)
-        for tid in topic_ids
-    ]).astype(np.float32)
-
-    outlier_idx = np.where(topic_assignments == -1)[0]
-    outlier_embs = embeddings[outlier_idx].astype(np.float32)
-
-    # Cosine similarity: outliers × topic centroids
-    sims = _cos_sim(outlier_embs, centroids)  # shape: (n_outliers, n_topics)
-    best_sim   = sims.max(axis=1)
-    best_topic = np.array(topic_ids)[sims.argmax(axis=1)]
-
-    new_topics = list(topics)
-    reassigned = 0
-    for i, (idx, sim, tid) in enumerate(zip(outlier_idx, best_sim, best_topic)):
+    topic_ids   = sorted(set(t for t in topics if t != -1))
+    _ta         = np.array(topics)
+    centroids   = np.vstack([embeddings[_ta == tid].mean(axis=0) for tid in topic_ids]).astype(np.float32)
+    outlier_idx = np.where(_ta == -1)[0]
+    sims        = _cos_sim(embeddings[outlier_idx].astype(np.float32), centroids)
+    best_topic  = np.array(topic_ids)[sims.argmax(axis=1)]
+    new_topics  = list(topics)
+    for idx, sim, tid in zip(outlier_idx, sims.max(axis=1), best_topic):
         if sim >= args.outlier_threshold:
             new_topics[idx] = int(tid)
-            reassigned += 1
-
-    topic_model.update_topics(docs, topics=new_topics)
-    topic_model.update_topics(docs, topics=new_topics)
-    topics = [int(t) for t in new_topics]  # convert numpy int64 → Python int
+    topics = [int(t) for t in new_topics]
     n_outliers_new = sum(1 for t in topics if t == -1)
     log.info(f"After reduction — Outliers: {n_outliers_new} ({100*n_outliers_new/len(topics):.1f}%)  "
              f"(was {n_outliers}, reduced by {n_outliers - n_outliers_new})")
-    # Save updated topics under the output tag
     with open(_topics_save_path, "w") as f:
         json.dump(topics, f)
 
-# Re-extract representative docs
-import pandas as _pd
-_documents_df = _pd.DataFrame({"Document": docs, "Topic": topics})
-_repr_docs, _, _, _ = topic_model._extract_representative_docs(
-    topic_model.c_tf_idf_,
-    _documents_df,
-    topic_model.topic_representations_,
-    nr_samples=500,
-    nr_repr_docs=args.nr_repr_docs,
-)
-topic_model.representative_docs_ = _repr_docs
-log.info(f"Representative docs per topic: {args.nr_repr_docs}")
+    # Load existing LLM labels from cache
+    LLM_MODEL = args.llm_model
+    cached_labels_files = sorted(CACHE_DIR.glob("llm_labels_*.json"))
+    labels = {}
+    if cached_labels_files:
+        labels = {int(k): str(v) for k, v in json.loads(cached_labels_files[-1].read_text()).items()}
+        log.info(f"Loaded {len(labels)} cached labels from {cached_labels_files[-1].name}")
+    else:
+        log.warning("No cached LLM labels found")
 
-if args.debug:
-    log.info("Debug mode — skipping LLM labelling and plots")
-    import sys; sys.exit(0)
+    # Reconstruct topic_info with updated counts
+    from collections import Counter
+    new_counts  = Counter(t for t in topics if t != -1)
+    base_csv    = PROJECT_ROOT / f"outputs_NDE_{_load_tag}" / "topic_info.csv"
+    if base_csv.exists():
+        topic_info = _pd.read_csv(base_csv)
+        topic_info["Count"] = topic_info["Topic"].map(lambda t: new_counts.get(int(t), 0))
+    else:
+        topic_info = _pd.DataFrame([
+            {"Topic": t, "Count": c, "Name": labels.get(t, f"Topic {t}"), "LLM_Label": labels.get(t, "")}
+            for t, c in sorted(new_counts.items())
+        ])
+    name_map = dict(zip(topic_info["Topic"].astype(int),
+                        topic_info["Name"].astype(str) if "Name" in topic_info.columns
+                        else topic_info["LLM_Label"].astype(str)))
 
-# ── Step 3: LLM labelling ─────────────────────────────────────────────────────
-log.info("Step 3 — LLM labelling")
-LLM_MODEL = args.llm_model
+else:
+    # ── Normal mode: load/run topic model ────────────────────────────────────
+    if _topic_model_path.exists() and Path(_topics_path).exists() and Path(_reduced_path).exists():
+        log.info("Step 2 — loading cached topic model for this variant")
+        from bertopic import BERTopic
+        topic_model = BERTopic.load(str(_topic_model_path))
+        with open(_topics_path) as f:
+            topics = json.load(f)
+        reduced_2d = np.load(_reduced_path)
+    else:
+        log.info("Step 2 — topic modelling")
+        topic_model, reduced_2d, topics = run_topic_model(docs, embeddings, CONFIG)
+        topic_model.save(str(CACHE_DIR / f"topic_model_{args.tag}"))
+        np.save(_reduced_save_path, reduced_2d)
+        with open(_topics_save_path, "w") as f:
+            json.dump(topics, f)
 
-labels = generate_llm_labels(
-    topic_model,
-    hf_token=HF_TOKEN,
-    model_id=LLM_MODEL,
-    max_topics=100,
-    max_docs_per_topic=10,
-    doc_char_limit=600,
-    temperature=0.2,
-)
+    n_topics   = len(set(t for t in topics if t != -1))
+    n_outliers = sum(1 for t in topics if t == -1)
+    log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
-llm_cache = labels_cache_path(CACHE_DIR, config_hash, LLM_MODEL)
-llm_cache.write_text(
-    json.dumps({str(k): v for k, v in labels.items()}, indent=2),
-    encoding="utf-8",
-)
-log.info(f"Labelled {len(labels)} topics  →  {llm_cache}")
+    _documents_df = _pd.DataFrame({"Document": docs, "Topic": topics})
+    _repr_docs, _, _, _ = topic_model._extract_representative_docs(
+        topic_model.c_tf_idf_, _documents_df, topic_model.topic_representations_,
+        nr_samples=500, nr_repr_docs=args.nr_repr_docs,
+    )
+    topic_model.representative_docs_ = _repr_docs
+    log.info(f"Representative docs per topic: {args.nr_repr_docs}")
+
+    if args.debug:
+        log.info("Debug mode — skipping LLM labelling and plots")
+        import sys; sys.exit(0)
+
+    log.info("Step 3 — LLM labelling")
+    LLM_MODEL = args.llm_model
+    labels = generate_llm_labels(
+        topic_model, hf_token=HF_TOKEN, model_id=LLM_MODEL,
+        max_topics=100, max_docs_per_topic=10, doc_char_limit=600, temperature=0.2,
+    )
+    llm_cache = labels_cache_path(CACHE_DIR, config_hash, LLM_MODEL)
+    llm_cache.write_text(json.dumps({str(k): v for k, v in labels.items()}, indent=2), encoding="utf-8")
+    log.info(f"Labelled {len(labels)} topics  →  {llm_cache}")
+
+    topic_info = topic_model.get_topic_info()
+    name_map   = topic_info.set_index("Topic")["Name"].to_dict()
 
 # ── Step 4: Save plots ────────────────────────────────────────────────────────
 log.info("Step 4 — generating plots")
 
 PLOTS_DIR = PROJECT_ROOT / f"outputs_NDE_{args.tag}"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-
-topic_info = topic_model.get_topic_info()
-name_map   = topic_info.set_index("Topic")["Name"].to_dict()
 doc_labels = [
     labels.get(t, name_map.get(t, "Unlabelled")) if t != -1 else "Unlabelled"
     for t in topics

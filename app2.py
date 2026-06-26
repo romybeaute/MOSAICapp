@@ -1885,10 +1885,9 @@ if not os.path.exists(EMBEDDINGS_FILE):
 
                 if not sa_zs_plot_df.empty:
                     st.subheader("Distribution across categories")
-                    import matplotlib.cm as _cm
                     import matplotlib.colors as _mcolors
                     _norm = _mcolors.Normalize(vmin=sa_zs_plot_df["Count"].min(), vmax=sa_zs_plot_df["Count"].max())
-                    _cmap = _cm.get_cmap("Purples")
+                    _cmap = plt.get_cmap("Purples")
                     _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in sa_zs_plot_df["Count"]]
                     fig_sa_zs, ax_sa_zs = plt.subplots(figsize=(10, max(4, len(sa_zs_plot_df) * 0.62)))
                     fig_sa_zs.patch.set_facecolor("white")
@@ -3300,14 +3299,13 @@ else:
 
             if not zs_plot_df.empty:
                 st.subheader("Distribution across categories")
-                import matplotlib.cm as _cm
                 import matplotlib.colors as _mcolors
 
                 _norm = _mcolors.Normalize(
                     vmin=zs_plot_df["Count"].min(),
                     vmax=zs_plot_df["Count"].max(),
                 )
-                _cmap = _cm.get_cmap("Blues")
+                _cmap = plt.get_cmap("Blues")
                 _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in zs_plot_df["Count"]]
 
                 fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.62)))

@@ -25,10 +25,12 @@ from huggingface_hub import InferenceClient # for the LLM API command
 
 from typing import Any
 
-from io import BytesIO 
+from io import BytesIO
+import zipfile
 
 
 import hashlib
+import uuid
 from datetime import datetime
 import altair as alt
 
@@ -354,6 +356,8 @@ with st.sidebar.expander("About the dataset name", expanded=False):
 
 
 def _list_server_csvs(proc_dir: Path) -> list[str]:
+    # Non-recursive on purpose: per-session uploads live under proc_dir/_uploads/<id>/
+    # and must never appear here (otherwise one visitor's data leaks to others).
     return [str(p) for p in sorted(proc_dir.glob("*.csv"))]
 
 
@@ -992,6 +996,13 @@ def generate_and_save_embeddings(
 
 st.sidebar.header("Data Input Method")
 
+# Per-visitor session id. On a shared host (e.g. a Hugging Face Space) every
+# visitor runs inside the same process, so without this an uploaded CSV would be
+# saved into the shared PROC_DIR and shown in *everyone's* "server CSV" list.
+# We use this id to give each session a private upload + cache workspace.
+if "_session_id" not in st.session_state:
+    st.session_state["_session_id"] = uuid.uuid4().hex[:12]
+
 source = st.sidebar.radio(
     "Choose data source",
     ("Use preprocessed CSV on server", "Upload my own CSV"),
@@ -1057,12 +1068,20 @@ else:
         print(f"Successfully loaded CSV using {success_encoding} encoding.")
 
 
+        # Private per-session workspace: the uploaded CSV and ALL derived artifacts
+        # (docs, embeddings, metadata, topic model) live here so they are never
+        # listed or reused by other visitors sharing this host.
+        session_dir = PROC_DIR / "_uploads" / st.session_state["_session_id"]
+        session_dir.mkdir(parents=True, exist_ok=True)
+        CACHE_DIR = session_dir / "cache"
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
         safe_filename = _slugify(os.path.splitext(up.name)[0])
         _cleanup_old_cache(safe_filename)
-        uploaded_csv_path = str((PROC_DIR / f"{safe_filename}.csv").resolve())
-        
+        uploaded_csv_path = str((session_dir / f"{safe_filename}.csv").resolve())
+
         tmp_df.to_csv(uploaded_csv_path, index=False)
-        st.success(f"Uploaded CSV saved to {uploaded_csv_path}")
+        st.success("Uploaded CSV saved to a private session workspace (not shared with other users).")
         CSV_PATH = uploaded_csv_path
     else:
         st.info("Upload a CSV to continue.")
@@ -1169,6 +1188,7 @@ selected_embedding_model = st.sidebar.selectbox(
         "BAAI/bge-small-en-v1.5",
         "intfloat/multilingual-e5-large-instruct",
         "Qwen/Qwen3-Embedding-0.6B",
+        "Qwen/Qwen3-Embedding-4B",
         "sentence-transformers/all-mpnet-base-v2",
     ),
     help="Unsure which model to pick? Check the [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard) for performance maximising on Clustering and STS tasks."
@@ -1179,6 +1199,38 @@ selected_device = st.sidebar.radio(
     ["GPU", "CPU"],
     index=0,
 )
+
+
+@st.cache_data
+def _detect_runtime_device() -> str:
+    """Return the GPU/accelerator actually available to this process: 'cuda', 'mps' or 'cpu'."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
+_runtime_device = _detect_runtime_device()
+
+if _runtime_device == "cuda":
+    st.sidebar.success("🟢 GPU (CUDA) detected — it will be used for embedding.")
+elif _runtime_device == "mps":
+    st.sidebar.success("🟢 Apple GPU (MPS) detected — it will be used for embedding.")
+else:
+    st.sidebar.warning(
+        "🟡 No GPU available — running on **CPU**. "
+        "Selecting 'GPU' above has no effect here and falls back to CPU."
+    )
+    if selected_device == "GPU":
+        st.sidebar.caption(
+            "On a Hugging Face Space, a GPU only appears here if you upgrade the Space "
+            "hardware *and* install a CUDA build of torch (the pinned build is CPU-only)."
+        )
 
 # =====================================================================
 # 7. Precompute filenames and pipeline triggers
@@ -2836,6 +2888,29 @@ else:
                 use_container_width=True,
                 type="primary",
             )
+
+            # One-click bundle: everything needed to re-run Zero-Shot (.npy + .json)
+            # and Condition Comparison (topics summary CSV) later, without re-running.
+            st.markdown(
+                "**Or grab everything at once** — this `.zip` has the embeddings + docs "
+                "(for *Zero-Shot*) and the topics summary (for *Condition Comparison*)."
+            )
+            _bundle_buf = BytesIO()
+            with zipfile.ZipFile(_bundle_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
+                _zf.writestr(csv_name, export_csv.to_csv(index=False))
+                if os.path.exists(EMBEDDINGS_FILE):
+                    _zf.write(EMBEDDINGS_FILE, arcname=os.path.basename(EMBEDDINGS_FILE))
+                if os.path.exists(DOCS_FILE):
+                    _zf.write(DOCS_FILE, arcname=os.path.basename(DOCS_FILE))
+            st.download_button(
+                "⬇ Download reusable bundle (.zip): embeddings + docs + topics summary",
+                data=_bundle_buf.getvalue(),
+                file_name=f"mosaic_bundle_{base}_{gran}.zip",
+                mime="application/zip",
+                use_container_width=True,
+                help="Re-upload the .npy + .json in the Zero-Shot tab, and the topics summary CSV "
+                     "in the Condition Comparison tab — no need to re-run the pipeline.",
+            )
             st.markdown("---")
 
             cL, cC, cR = st.columns(3)
@@ -2966,7 +3041,7 @@ else:
             else:
                 with st.spinner(f"Classifying {len(docs):,} documents into {len(zs_categories)} categories…"):
                     try:
-                        zs_topics, zs_topic_info = run_zeroshot(
+                        zs_topics, zs_topic_info, _ = run_zeroshot(
                             docs,
                             embeddings,
                             tuple(zs_categories),

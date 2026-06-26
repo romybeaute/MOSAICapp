@@ -86,6 +86,13 @@ python -c "import nltk; nltk.download('punkt')"
 ```
 streamlit run app.py
 ```
+to use the basic version (if only needs topic-modelling)
+or use 
+```
+streamlit run app2.py
+```
+to use the new, extended version, with zero-shot and comparison between datasets (may be a bit slower)
+
 
 ### Input format
 

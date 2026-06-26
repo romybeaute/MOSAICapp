@@ -247,17 +247,19 @@ cols = ["Topic", "LLM_Label"] + [c for c in info_no_outliers.columns if c not in
 info_no_outliers[cols].to_csv(PLOTS_DIR / "topic_info.csv", index=False)
 log.info(f"Topic info →  {PLOTS_DIR / 'topic_info.csv'}")
 
-# 3b. All sentences per topic — for condition comparison and app2.py
+# 3b. Topics summary — one row per topic (for condition comparison in app2.py)
+from collections import defaultdict as _dd
 import pandas as _pd2
 llm_map_full = {**name_map, **{int(k): v for k, v in labels.items()}}
-sentences_df = _pd2.DataFrame({
-    "Topic":      topics,
-    "Topic Name": [llm_map_full.get(t, "Unlabelled") if t != -1 else "Unlabelled" for t in topics],
-    "Document":   docs,
-})
-sentences_df = sentences_df[sentences_df["Topic"] != -1]
-sentences_df.to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
-log.info(f"All sentences →  {PLOTS_DIR / 'topics_sentences.csv'}")
+_topic_sents = _dd(list)
+for _t, _d in zip(topics, docs):
+    if _t != -1:
+        _topic_sents[_t].append(_d)
+_rows = [{"topic_name": llm_map_full.get(_t, f"Topic {_t}"),
+          "texts": " | ".join(_s), "n_sentences": len(_s)}
+         for _t, _s in sorted(_topic_sents.items())]
+_pd2.DataFrame(_rows).to_csv(PLOTS_DIR / "topics_sentences.csv", index=False)
+log.info(f"Topics summary →  {PLOTS_DIR / 'topics_sentences.csv'}")
 
 # 4. Interactive HTML — zoomable documents + topics scatter
 try:

@@ -83,23 +83,29 @@ doc_labels = [
 # ── 1. Datamapplot ────────────────────────────────────────────────────────────
 try:
     import datamapplot
+    # Push labels out further using data-scale radius
+    data_range = reduced_2d.max(axis=0) - reduced_2d.min(axis=0)
+    base_radius = float(min(data_range) * 0.55)
+
     fig, _ = datamapplot.create_plot(
         reduced_2d,
         doc_labels,
         noise_label="Unlabelled",
         noise_color="#CCCCCC",
-        figsize=(30, 30),
+        figsize=(40, 40),
         dynamic_label_size=True,
         dynamic_label_size_scaling_factor=0.9,
-        label_font_size=11,
+        label_font_size=22,
         label_wrap_width=10,
-        label_margin_factor=7.0,
+        label_margin_factor=2.0,
+        label_direction_bias=1.0,
+        label_base_radius=base_radius,
         arrowprops={"arrowstyle": "-", "color": "#333333"},
     )
     subtitle = f"N = {n_sentences} sentences"
     if n_reports:
         subtitle += f", {n_reports} reports"
-    fig.suptitle(f"{DATASET_NAME} [{args.tag}]: MOSAIC Topic Map ({subtitle})", fontsize=20, y=0.99)
+    fig.suptitle(f"{DATASET_NAME}: MOSAIC Topic Map ({subtitle})", fontsize=22, y=0.99)
     fig.savefig(PLOTS_DIR / "topic_map.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"topic_map.png  →  {PLOTS_DIR}")

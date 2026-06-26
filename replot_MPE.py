@@ -24,10 +24,12 @@ import numpy as np
 import pandas as pd
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--topic-info", default="data/MPE/output/outputs_MPE/topic_info.csv")
-parser.add_argument("--output-dir", default="data/MPE/output/outputs_MPE")
-parser.add_argument("--cache-dir",  default="data/MPE/preprocessed/cache")
-parser.add_argument("--csv",        default="data/MPE/preprocessed/MPE_dataset_translated_batched.csv",
+parser.add_argument("--topic-info",  default="data/MPE/output/outputs_MPE/topic_info.csv")
+parser.add_argument("--output-dir",  default="data/MPE/output/outputs_MPE")
+parser.add_argument("--cache-dir",   default="data/MPE/preprocessed/cache")
+parser.add_argument("--topics-file", default=None,
+                    help="Override topics.json (e.g. topics_mpe_ro70.json for reduced version)")
+parser.add_argument("--csv",         default="data/MPE/preprocessed/MPE_dataset_translated_batched.csv",
                     help="Original CSV to count number of reports")
 args = parser.parse_args()
 
@@ -49,7 +51,8 @@ if not docs_files:
 with open(docs_files[0], encoding="utf-8") as f:
     docs = json.load(f)
 
-with open(CACHE_DIR / "topics.json") as f:
+topics_path = Path(args.topics_file) if args.topics_file else CACHE_DIR / "topics.json"
+with open(topics_path) as f:
     topics = json.load(f)
 
 reduced_2d = np.load(CACHE_DIR / "reduced_2d.npy")

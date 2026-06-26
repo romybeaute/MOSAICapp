@@ -2274,9 +2274,17 @@ else:
                 if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
                     with st.spinner("Calculating coherence metrics..."):
                         # prepare Data for Gensim (C_v)
-                        tokenized_docs = [d.split() for d in docs]
+                        # IMPORTANT: tokenise the docs the same way BERTopic's CountVectorizer
+                        # does (lowercase + the default token pattern: word chars, 2+ length),
+                        # otherwise the gensim dictionary keeps original case/punctuation
+                        # (e.g. "Death,") and never matches the cleaned topic words
+                        # (e.g. "death"), which makes CoherenceModel raise
+                        # "unable to interpret topic as either a list of tokens or a list of ids".
+                        _token_pattern = re.compile(r"(?u)\b\w\w+\b")
+                        tokenized_docs = [_token_pattern.findall(d.lower()) for d in docs]
                         dictionary = Dictionary(tokenized_docs)
-                        
+                        _vocab = dictionary.token2id
+
                         # Get top 10 words for every active topic (excluding outliers)
                         unique_topics = [t for t in set(tm.topics_) if t != -1]
                         topics_top_words = []
@@ -2284,17 +2292,25 @@ else:
                             topic_words = tm.get_topic(t)
                             # tm.get_topic() can return False or empty for some topics
                             if topic_words and topic_words is not False:
-                                words = [word for word, _ in topic_words[:10]]
-                                if words:  # Only add non-empty word lists
+                                # split n-grams into their component tokens and keep only
+                                # tokens that are actually present in the dictionary, so a
+                                # single OOV / multi-word phrase can't crash the whole metric
+                                words = []
+                                for word, _ in topic_words[:10]:
+                                    for tok in str(word).lower().split():
+                                        if tok in _vocab and tok not in words:
+                                            words.append(tok)
+                                # C_v needs at least 2 words to compute co-occurrence
+                                if len(words) >= 2:
                                     topics_top_words.append(words)
 
                         # calculate C_v
                         if topics_top_words and len(topics_top_words) > 0:
                             cm = CoherenceModel(
-                                topics=topics_top_words, 
-                                texts=tokenized_docs, 
-                                dictionary=dictionary, 
-                                coherence='c_v', 
+                                topics=topics_top_words,
+                                texts=tokenized_docs,
+                                dictionary=dictionary,
+                                coherence='c_v',
                                 processes=1
                             )
                             c_v_score = cm.get_coherence()

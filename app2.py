@@ -351,6 +351,8 @@ with st.sidebar.expander("About the dataset name", expanded=False):
   - Exports (results): `{EVAL_DIR}`
 - If you choose **Use preprocessed CSV on server**, I’ll list CSVs in `{PROC_DIR}`.
 - If you **upload** a CSV, it will be saved to `{PROC_DIR}/uploaded.csv`.
+- If you **load precomputed embeddings** (`.npy` + `docs.json` from `run_embeddings.py`),
+  embedding is skipped and the app runs topic modelling directly on them.
         """.strip()
     )
 
@@ -1050,13 +1052,15 @@ if "_session_id" not in st.session_state:
 
 source = st.sidebar.radio(
     "Choose data source",
-    ("Use preprocessed CSV on server", "Upload my own CSV"),
+    ("Use preprocessed CSV on server", "Upload my own CSV",
+     "Load precomputed embeddings (.npy + docs)"),
     index=0,
     key="data_source",
 )
 
 uploaded_csv_path = None
 CSV_PATH = None  # will be set in the chosen branch
+PRECOMPUTED_MODE = False  # set True in the precomputed-embeddings branch
 
 if source == "Use preprocessed CSV on server":
     available = _list_server_csvs(PROC_DIR)
@@ -1069,7 +1073,7 @@ if source == "Use preprocessed CSV on server":
         "Choose a preprocessed CSV", available, key="server_csv_select"
     )
     CSV_PATH = selected_csv
-else:
+elif source == "Upload my own CSV":
     up = st.sidebar.file_uploader(
         "Upload a CSV", type=["csv"], key="upload_csv"
     )
@@ -1131,6 +1135,56 @@ else:
     else:
         st.info("Upload a CSV to continue.")
         st.stop()
+
+else:  # "Load precomputed embeddings (.npy + docs)"
+    st.sidebar.caption(
+        "Upload the **`*_embeddings.npy`** and **`*_docs.json`** files produced by "
+        "`run_embeddings.py` (e.g. computed on a GPU/HPC with the Qwen 4B model). "
+        "Embedding is skipped entirely — the app goes straight to topic modelling. "
+        "Make sure the **embedding model** selected below matches the one used to "
+        "create the .npy file."
+    )
+    pre_label = st.sidebar.text_input(
+        "Dataset label (used for naming/results)", value="precomputed",
+        key="precomp_label",
+    )
+    up_emb = st.sidebar.file_uploader(
+        "Embeddings file (.npy)", type=["npy"], key="precomp_npy"
+    )
+    up_docs = st.sidebar.file_uploader(
+        "Documents file (docs.json — list of strings)", type=["json"], key="precomp_docs"
+    )
+    if up_emb is None or up_docs is None:
+        st.info("Upload **both** the `.npy` embeddings and the `docs.json` to continue.")
+        st.stop()
+
+    # Private per-session workspace (same isolation as the upload branch).
+    session_dir = PROC_DIR / "_uploads" / st.session_state["_session_id"]
+    session_dir.mkdir(parents=True, exist_ok=True)
+    CACHE_DIR = session_dir / "cache"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    try:
+        up_docs.seek(0)
+        _docs_list = json.load(up_docs)
+    except Exception as e:
+        st.error(f"Could not read docs.json: {e}")
+        st.stop()
+    if not isinstance(_docs_list, list) or not _docs_list:
+        st.error("docs.json must be a non-empty JSON list of strings.")
+        st.stop()
+    _docs_list = [str(d) for d in _docs_list]
+
+    # Synthesize a one-row-per-document CSV so every downstream step (text-column
+    # selection, counts, metadata, export) works exactly as for an uploaded CSV.
+    safe_filename = _slugify(pre_label or "precomputed")
+    CSV_PATH = str((session_dir / f"{safe_filename}.csv").resolve())
+    pd.DataFrame({"text": _docs_list}).to_csv(CSV_PATH, index=False)
+    st.success(
+        f"Loaded {len(_docs_list)} precomputed documents into a private session "
+        "workspace (not shared with other users)."
+    )
+    PRECOMPUTED_MODE = True
 
 if CSV_PATH is None:
     st.stop()
@@ -1323,7 +1377,31 @@ DOCS_FILE, EMBEDDINGS_FILE = get_precomputed_filenames(
 )
 
 METADATA_FILE = DOCS_FILE.replace("_docs.json", "_metadata.csv")
-    
+
+if PRECOMPUTED_MODE:
+    # Persist the uploaded files at the exact cache paths the app expects, so the
+    # "embeddings already exist" check below short-circuits straight to topic
+    # modelling. Written once (guarded on existence) to avoid re-copying ~100 MB
+    # on every Streamlit rerun.
+    if not os.path.exists(DOCS_FILE):
+        with open(DOCS_FILE, "w", encoding="utf-8") as _f:
+            json.dump(_docs_list, _f, ensure_ascii=False)
+    if not os.path.exists(EMBEDDINGS_FILE):
+        up_emb.seek(0)
+        with open(EMBEDDINGS_FILE, "wb") as _f:
+            _f.write(up_emb.getbuffer())
+    try:
+        _emb_rows = np.load(EMBEDDINGS_FILE, mmap_mode="r").shape[0]
+    except Exception as e:
+        st.error(f"Could not read the uploaded .npy embeddings: {e}")
+        st.stop()
+    if _emb_rows != len(_docs_list):
+        st.error(
+            f"Mismatch: the .npy has {_emb_rows} rows but docs.json has "
+            f"{len(_docs_list)} entries. Upload matching files (same run)."
+        )
+        st.stop()
+
 # Cache management
 st.sidebar.markdown("### Cache")
 

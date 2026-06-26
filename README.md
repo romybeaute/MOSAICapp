@@ -120,6 +120,61 @@ HF_TOKEN = "hf_..."
 
 ---
 
+## 3. Pre-computing embeddings locally (optional)
+
+Embedding is the slow part of the pipeline, and the hosted Space runs on shared CPUs.
+If you have a GPU (locally or on an HPC cluster), you can compute the embeddings once
+and reuse them — the app will then skip embedding entirely.
+
+Use [`run_embeddings.py`](run_embeddings.py), which does **only** preprocessing +
+embedding (no BERTopic fit, no LLM, no `HF_TOKEN` needed).
+
+**Steps:**
+
+1. Open `run_embeddings.py` and edit the config block at the top:
+   ```python
+   DATASET_NAME    = "MOSAIC"                       # must match the app's "Project/Dataset name"
+   CSV_PATH        = "data/my_interviews.csv"       # path to your CSV
+   EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-4B"      # must match the model picked in the app
+   TEXT_COL        = "sentence"                      # column holding the text (None = auto-detect)
+   SPLIT_SENTENCES = True
+   MIN_WORDS       = 3
+   DEVICE          = "cuda"                          # "cuda" on a GPU, "mps" on a Mac, "cpu" otherwise
+   ```
+
+2. Run it:
+   ```bash
+   python run_embeddings.py
+   ```
+   This writes two files into `data/<DATASET_NAME>/preprocessed/cache/`:
+   `precomputed_..._docs.json` and `precomputed_..._embeddings.npy`.
+
+3. In the app, pick the **same** dataset name, embedding model, and segmentation
+   settings. The app finds the cached files and skips embedding.
+   (To use them on the hosted Space, upload those two files to the Space's matching
+   `cache/` folder via the **Files** tab.)
+
+### On an HPC cluster (SLURM, e.g. Artemis)
+
+A ready-made batch script is provided in [`run_embeddings.sh`](run_embeddings.sh)
+(requests 1 GPU). The only extra step is installing the **CUDA** build of PyTorch
+(the pinned `requirements.txt` ships the CPU-only build):
+
+```bash
+ssh you@cluster
+cd MOSAICapp
+git pull
+module load CUDA/12.1.1
+source .venv/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cu121 --force-reinstall
+
+# edit run_embeddings.py (CSV_PATH, model, DEVICE="cuda"), then:
+sbatch run_embeddings.sh
+squeue -u $USER          # monitor; output goes to embed_<jobid>.log
+```
+
+---
+
 # Python API (Advanced Usage)
 MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
 

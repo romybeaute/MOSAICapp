@@ -840,7 +840,17 @@ def compute_condition_similarity(
     all_sents_b = [s for sents in topics_b.values() for s in sents]
 
     unique_sents = list(dict.fromkeys(all_sents_a + all_sents_b))
-    embeddings = _embed_sentences(tuple(unique_sents), model_name)
+    embeddings = np.asarray(_embed_sentences(tuple(unique_sents), model_name), dtype=np.float64)
+
+    # ── Mean-centering (remove the common component) ──────────────────────────
+    # Sentence-transformer embeddings are anisotropic: they occupy a narrow cone,
+    # so *every* pair of topics scores a high cosine (~0.6–0.99) and even unrelated
+    # themes look "strongly correlated". Subtracting the global centroid removes
+    # that shared direction and restores a discriminative range (≈ -0.4 … 0.9),
+    # where unrelated topics fall near 0 (or negative) and real matches stand out.
+    if len(embeddings) > 1:
+        embeddings = embeddings - embeddings.mean(axis=0, keepdims=True)
+
     sent_to_vec = {s: embeddings[i] for i, s in enumerate(unique_sents)}
 
     def _mean_vec(sents):
@@ -1403,16 +1413,20 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     sim_col, thresh_col = st.columns([1, 1])
     with sim_col:
         cond_threshold = st.slider(
-            "Match threshold (cosine similarity)",
-            min_value=0.50, max_value=0.99, value=0.85, step=0.01,
+            "Match threshold (centered cosine similarity)",
+            min_value=-0.20, max_value=0.95, value=0.50, step=0.01,
             key=f"cond_thresh{key_suffix}",
-            help="Topic pairs with similarity above this value are considered 'shared'.",
+            help="Topic pairs scoring above this value are considered 'shared'. "
+                 "On the mean-centered scale, ≥0.50 is a strong/solid match, "
+                 "0.35–0.50 is moderate, and <0.30 is essentially unrelated.",
         )
     with thresh_col:
         st.info(
             f"Embedding model: `{embedding_model}`  \n"
-            "Sentences in each topic CSV are embedded and averaged to a single topic vector, "
-            "then cosine similarity is computed pairwise."
+            "Sentences in each topic are embedded, **mean-centered** (the shared "
+            "component is removed so unrelated topics no longer look similar), "
+            "averaged to one vector per topic, then compared by cosine similarity. "
+            "Scores now span roughly −0.4 … 0.9 instead of being squeezed into 0.6–1.0."
         )
 
     run_cond = st.button(
@@ -1461,36 +1475,51 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     # ── Heatmap ──────────────────────────────────────────────────
     st.subheader("Cosine Similarity Heatmap")
 
-    max_per_cond = st.slider(
-        "Max topics per condition to display", 3, 30, 10, 1,
-        key=f"heat_topn{key_suffix}",
-        help="Keeps the heatmap readable. Shows the N largest topics (by number of "
-             "sentences) from each condition, e.g. 10 gives a 10×10 grid.",
+    show_all = st.checkbox(
+        "Show ALL topics", value=False, key=f"heat_showall{key_suffix}",
+        help="Display the full topic-by-topic matrix. Untick to show only the "
+             "largest topics for a more readable grid.",
     )
-    # Rank topics by size (sentence count) and keep the top-N present in the matrix.
-    _top_a = [n for n in sorted(topics_a, key=lambda k: len(topics_a[k]), reverse=True)
-              if n in sim_df.index][:max_per_cond]
-    _top_b = [n for n in sorted(topics_b, key=lambda k: len(topics_b[k]), reverse=True)
-              if n in sim_df.columns][:max_per_cond]
+    if show_all:
+        _top_a = list(sim_df.index)
+        _top_b = list(sim_df.columns)
+    else:
+        max_per_cond = st.slider(
+            "Max topics per condition to display", 3, 50, 10, 1,
+            key=f"heat_topn{key_suffix}",
+            help="Shows the N largest topics (by number of sentences) from each "
+                 "condition, e.g. 10 gives a 10×10 grid.",
+        )
+        # Rank topics by size (sentence count) and keep the top-N present in the matrix.
+        _top_a = [n for n in sorted(topics_a, key=lambda k: len(topics_a[k]), reverse=True)
+                  if n in sim_df.index][:max_per_cond]
+        _top_b = [n for n in sorted(topics_b, key=lambda k: len(topics_b[k]), reverse=True)
+                  if n in sim_df.columns][:max_per_cond]
     heat_df = sim_df.loc[_top_a, _top_b]
     if len(_top_a) < len(sim_df.index) or len(_top_b) < len(sim_df.columns):
         st.caption(
             f"Showing the {len(_top_a)}×{len(_top_b)} largest topics "
             f"(of {len(sim_df.index)}×{len(sim_df.columns)} total). "
-            "Increase the slider to see more."
+            "Tick 'Show ALL topics' or raise the slider to see more."
         )
 
+    # Centered cosine: use a diverging scale anchored at 0 so unrelated topics
+    # (near 0 / negative) read as neutral and real matches stand out in green.
+    _vmax = max(0.3, float(np.nanmax(heat_df.values))) if heat_df.size else 1.0
+    _vmin = min(-0.3, float(np.nanmin(heat_df.values))) if heat_df.size else -1.0
     _ncols = len(heat_df.columns)
     _nrows = len(heat_df)
+    # Annotate values only when the grid is small enough to stay legible.
+    _annot = (_nrows * _ncols) <= 400
     fig_heat, ax_heat = plt.subplots(figsize=(max(7, _ncols * 1.4), max(5, _nrows * 1.0)))
     fig_heat.patch.set_facecolor("white")
     sns.heatmap(
-        heat_df, annot=True, fmt=".2f", cmap="RdYlGn",
-        vmin=0.5, vmax=1.0, linewidths=0.6, linecolor="#f0f0f0",
+        heat_df, annot=_annot, fmt=".2f", cmap="RdYlGn",
+        center=0.0, vmin=_vmin, vmax=_vmax, linewidths=0.6, linecolor="#f0f0f0",
         annot_kws={"size": 9, "weight": "bold"},
         cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
     )
-    ax_heat.collections[0].colorbar.set_label("Cosine similarity", fontsize=9, labelpad=8)
+    ax_heat.collections[0].colorbar.set_label("Centered cosine similarity", fontsize=9, labelpad=8)
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=8)
     ax_heat.set_title(f"Semantic similarity: {name_a}  vs  {name_b}",
                       fontsize=13, pad=14, color="#222222")
@@ -1520,8 +1549,8 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         shared.append((idx_a, idx_b, max_score))
         if idx_a in unique_a: unique_a.remove(idx_a)
         if idx_b in unique_b: unique_b.remove(idx_b)
-        matrix_copy.loc[idx_a, :] = 0.0
-        matrix_copy.loc[:, idx_b] = 0.0
+        matrix_copy.loc[idx_a, :] = -1e9
+        matrix_copy.loc[:, idx_b] = -1e9
 
     if shared:
         shared_df = pd.DataFrame(shared, columns=[name_a, name_b, "cosine_similarity"])

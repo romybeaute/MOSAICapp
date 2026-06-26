@@ -9,4 +9,6 @@ module load CUDA/12.1.1
 
 source .venv/bin/activate
 
-python run_embeddings.py
+# Any args after the script name are forwarded to run_embeddings.py, e.g.:
+#   sbatch run_embeddings.sh --csv data-tutorial/DMT.csv --dataset DMT --text-col sentence
+python run_embeddings.py "$@"

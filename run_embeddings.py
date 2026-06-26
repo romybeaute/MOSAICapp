@@ -16,6 +16,7 @@ Usage:
     sbatch run_embeddings.sh                   # on a SLURM cluster (e.g. Artemis)
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from mosaic_core.core_functions import (
     get_precomputed_filenames,
 )
 
-# ── Edit these ────────────────────────────────────────────────────────────────
+# ── Defaults (override any of these on the command line, see --help) ───────────
 PROJECT_ROOT    = Path(__file__).parent
 DATASET_NAME    = "MOSAIC"                          # must match the app sidebar "Project/Dataset name"
 CSV_PATH        = "data/preprocessed/MOSAIC/your_file.csv"   # path to your CSV (← change this)
@@ -37,6 +38,25 @@ SPLIT_SENTENCES = True
 MIN_WORDS       = 3
 DEVICE          = "cuda"                            # "cuda" on Artemis, "mps" on a Mac, "cpu" otherwise
 # ──────────────────────────────────────────────────────────────────────────────
+
+_p = argparse.ArgumentParser(description="Compute and save ONLY the embeddings for a CSV.")
+_p.add_argument("--csv", default=CSV_PATH, help="Path to the input CSV")
+_p.add_argument("--dataset", default=DATASET_NAME, help="Dataset name (must match the app sidebar)")
+_p.add_argument("--model", default=EMBEDDING_MODEL, help="SentenceTransformer model name")
+_p.add_argument("--text-col", default=TEXT_COL, help="Text column (omit to auto-detect)")
+_p.add_argument("--min-words", type=int, default=MIN_WORDS, help="Drop sentences shorter than this")
+_p.add_argument("--device", default=DEVICE, help='"cuda", "mps" or "cpu"')
+_p.add_argument("--no-split", dest="split", action="store_false", help="Do NOT split into sentences")
+_p.set_defaults(split=SPLIT_SENTENCES)
+_args = _p.parse_args()
+
+DATASET_NAME    = _args.dataset
+CSV_PATH        = _args.csv
+EMBEDDING_MODEL = _args.model
+TEXT_COL        = _args.text_col
+SPLIT_SENTENCES = _args.split
+MIN_WORDS       = _args.min_words
+DEVICE          = _args.device
 
 CACHE_DIR = get_cache_dir(PROJECT_ROOT, DATASET_NAME)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)

@@ -1491,20 +1491,22 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     sim_col, thresh_col = st.columns([1, 1])
     with sim_col:
         cond_threshold = st.slider(
-            "Match threshold (centered cosine similarity)",
-            min_value=-0.20, max_value=0.95, value=0.50, step=0.01,
+            "Match threshold (correlation)",
+            min_value=0.0, max_value=0.90, value=0.45, step=0.01,
             key=f"cond_thresh{key_suffix}",
             help="Topic pairs scoring above this value are considered 'shared'. "
-                 "On the mean-centered scale, ≥0.50 is a strong/solid match, "
-                 "0.35–0.50 is moderate, and <0.30 is essentially unrelated.",
+                 "This is a correlation-like score (centered cosine): ≥0.45 is a "
+                 "strong/solid match, 0.30–0.45 is moderate, ~0 is unrelated, and "
+                 "negative means the topics actively contrast.",
         )
     with thresh_col:
         st.info(
             f"Embedding model: `{embedding_model}`  \n"
             "Sentences in each topic are embedded, **mean-centered** (the shared "
-            "component is removed so unrelated topics no longer look similar), "
-            "averaged to one vector per topic, then compared by cosine similarity. "
-            "Scores now span roughly −0.4 … 0.9 instead of being squeezed into 0.6–1.0."
+            "component all texts have is removed), averaged to one vector per topic, "
+            "then compared. The result behaves like a **correlation**: "
+            "**+1** = same theme, **0** = unrelated, **negative** = opposite/contrasting. "
+            "Values are smaller than raw cosine on purpose — 0.5–0.7 here is a strong match."
         )
 
     run_cond = st.button(
@@ -1597,7 +1599,8 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         annot_kws={"size": 9, "weight": "bold"},
         cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
     )
-    ax_heat.collections[0].colorbar.set_label("Centered cosine similarity", fontsize=9, labelpad=8)
+    ax_heat.collections[0].colorbar.set_label("Correlation (centered cosine): +1 same · 0 unrelated · −1 opposite",
+                                              fontsize=8, labelpad=8)
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=8)
     ax_heat.set_title(f"Semantic similarity: {name_a}  vs  {name_b}",
                       fontsize=13, pad=14, color="#222222")

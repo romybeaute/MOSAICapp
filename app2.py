@@ -485,15 +485,23 @@ def generate_labels_via_chat_completion(
     max_docs_per_topic: int = 10,
     doc_char_limit: int = 500,
     temperature: float = 0.2, #deterministic, stable outputs.
-    force: bool = False) -> dict[int, str]:
+    force: bool = False,
+    system_prompt: str | None = None,
+    user_template: str | None = None) -> dict[int, str]:
     """
     Label topics after fitting (fast + stable on Spaces).
     Returns {topic_id: label}.
     """
 
+    # Fall back to the built-in prompts when the UI doesn't override them.
+    system_prompt = system_prompt or SYSTEM_PROMPT
+    user_template = user_template or USER_TEMPLATE
+
     st.session_state["hf_last_model_param"] = model_id
-    
-    cache_path = _labels_cache_path(config_hash, model_id)
+
+    # Fold the prompts into the cache key so editing a prompt regenerates labels.
+    _prompt_sig = hashlib.md5((system_prompt + "||" + user_template).encode("utf-8")).hexdigest()[:8]
+    cache_path = _labels_cache_path(config_hash + "|" + _prompt_sig, model_id)
 
     if (not force) and cache_path.exists():
         try:
@@ -529,7 +537,7 @@ def generate_labels_via_chat_completion(
         else:
             docs_block = "- (No representative docs available)"
 
-        user_prompt = USER_TEMPLATE.format(documents=docs_block, keywords=keywords)
+        user_prompt = user_template.format(documents=docs_block, keywords=keywords)
         # Store one example prompt (for UI inspection) – will be overwritten each run
         st.session_state["hf_last_example_prompt"] = user_prompt
 
@@ -537,7 +545,7 @@ def generate_labels_via_chat_completion(
             out = client.chat_completion(
                 model=model_id,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=60, #Upper bound on how many tokens the model is allowed to generate as output for that label
@@ -602,9 +610,24 @@ def get_config_hash(cfg):
 def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
     """Fit BERTopic. dataset_key is only for cache invalidation across datasets."""
 
-    saved_model_path = CACHE_DIR / "topic_model"
-    saved_reduced_path = CACHE_DIR / "reduced_2d.npy"
-    saved_topics_path = CACHE_DIR / "topics.json"
+    # Config-keyed on-disk cache: a different config (incl. the random seed) gets
+    # its own files, so changing settings actually recomputes and concurrent users
+    # with different data never load each other's model.
+    _cfg_key = hashlib.md5((config_hash + "|" + str(dataset_key)).encode("utf-8")).hexdigest()[:10]
+    saved_model_path = CACHE_DIR / f"topic_model_{_cfg_key}"
+    saved_reduced_path = CACHE_DIR / f"reduced_2d_{_cfg_key}.npy"
+    saved_topics_path = CACHE_DIR / f"topics_{_cfg_key}.json"
+
+    # Legacy fixed-name cache shipped by run_pipeline.py (no config key). Only used
+    # as a fallback so previously shipped models keep working.
+    _legacy_model = CACHE_DIR / "topic_model"
+    _legacy_reduced = CACHE_DIR / "reduced_2d.npy"
+    _legacy_topics = CACHE_DIR / "topics.json"
+    if not (saved_model_path.exists() and saved_reduced_path.exists() and saved_topics_path.exists()):
+        if _legacy_model.exists() and _legacy_reduced.exists() and _legacy_topics.exists():
+            saved_model_path, saved_reduced_path, saved_topics_path = (
+                _legacy_model, _legacy_reduced, _legacy_topics,
+            )
 
     if saved_model_path.exists() and saved_reduced_path.exists() and saved_topics_path.exists():
         topic_model = BERTopic.load(str(saved_model_path))
@@ -649,7 +672,9 @@ def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
 
     rep_model = None  # Use BERTopic defaults for representation
 
-    umap_model = UMAP(random_state=42, metric="cosine", **config["umap_params"])
+    seed = int(config.get("random_seed", 42))
+
+    umap_model = UMAP(random_state=seed, metric="cosine", **config["umap_params"])
     hdbscan_model = HDBSCAN(
         metric="euclidean", prediction_data=True, **config["hdbscan_params"]
     )
@@ -704,8 +729,18 @@ def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
         n_components=2,
         min_dist=0.0,
         metric="cosine",
-        random_state=42,
+        random_state=seed,
     ).fit_transform(_embeddings)
+
+    # Persist to the config-keyed cache so an identical re-run is instant and the
+    # right model is loaded back (never another config's).
+    try:
+        topic_model.save(str(saved_model_path))
+        np.save(str(saved_reduced_path), reduced)
+        with open(saved_topics_path, "w") as f:
+            json.dump([int(t) for t in topics], f)
+    except Exception as e:
+        print(f"Could not persist topic-model cache: {e}")
 
     return topic_model, reduced, all_labels, len(info) - 1, outlier_pct
 
@@ -1158,6 +1193,23 @@ min_words = st.sidebar.slider(
 
 subsample_perc = st.sidebar.slider("Data sampling (%)", 10, 100, 100, 5)
 
+# Random seed for every stochastic step (UMAP for clustering, the 2D projection,
+# and subsampling). Defined here so it is in scope for both the subsample below
+# and the topic-model config further down.
+with st.sidebar.expander("Reproducibility (random seed)"):
+    st.caption(
+        "UMAP and subsampling are stochastic. A fixed seed makes runs reproducible; "
+        "tick 'new seed each run' to explore how stable the topics are."
+    )
+    randomize_seed = st.checkbox("New random seed each run", value=False)
+    if randomize_seed:
+        random_seed = int(np.random.randint(0, 1_000_000))
+        st.caption(f"This run's seed: `{random_seed}`")
+    else:
+        random_seed = int(
+            st.number_input("Random seed", min_value=0, max_value=1_000_000, value=42, step=1)
+        )
+
 st.sidebar.markdown("---")
 
 # ---------------------------------------------------------------------
@@ -1408,12 +1460,32 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
 
     # ── Heatmap ──────────────────────────────────────────────────
     st.subheader("Cosine Similarity Heatmap")
-    _ncols = len(sim_df.columns)
-    _nrows = len(sim_df)
+
+    max_per_cond = st.slider(
+        "Max topics per condition to display", 3, 30, 10, 1,
+        key=f"heat_topn{key_suffix}",
+        help="Keeps the heatmap readable. Shows the N largest topics (by number of "
+             "sentences) from each condition, e.g. 10 gives a 10×10 grid.",
+    )
+    # Rank topics by size (sentence count) and keep the top-N present in the matrix.
+    _top_a = [n for n in sorted(topics_a, key=lambda k: len(topics_a[k]), reverse=True)
+              if n in sim_df.index][:max_per_cond]
+    _top_b = [n for n in sorted(topics_b, key=lambda k: len(topics_b[k]), reverse=True)
+              if n in sim_df.columns][:max_per_cond]
+    heat_df = sim_df.loc[_top_a, _top_b]
+    if len(_top_a) < len(sim_df.index) or len(_top_b) < len(sim_df.columns):
+        st.caption(
+            f"Showing the {len(_top_a)}×{len(_top_b)} largest topics "
+            f"(of {len(sim_df.index)}×{len(sim_df.columns)} total). "
+            "Increase the slider to see more."
+        )
+
+    _ncols = len(heat_df.columns)
+    _nrows = len(heat_df)
     fig_heat, ax_heat = plt.subplots(figsize=(max(7, _ncols * 1.4), max(5, _nrows * 1.0)))
     fig_heat.patch.set_facecolor("white")
     sns.heatmap(
-        sim_df, annot=True, fmt=".2f", cmap="RdYlGn",
+        heat_df, annot=True, fmt=".2f", cmap="RdYlGn",
         vmin=0.5, vmax=1.0, linewidths=0.6, linecolor="#f0f0f0",
         annot_kws={"size": 9, "weight": "bold"},
         cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
@@ -1429,7 +1501,7 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     plt.tight_layout(pad=1.5)
     st.pyplot(fig_heat)
     buf_heat = BytesIO()
-    fig_heat.savefig(buf_heat, format="png", dpi=200, bbox_inches="tight")
+    fig_heat.savefig(buf_heat, format="png", dpi=300, bbox_inches="tight")
     st.download_button("Download heatmap as PNG", data=buf_heat.getvalue(),
                        file_name=f"similarity_heatmap_{name_a}_{name_b}.png", mime="image/png")
     plt.close(fig_heat)
@@ -1911,7 +1983,7 @@ else:
 
     if subsample_perc < 100:
         n = int(len(docs) * (subsample_perc / 100))
-        idx = np.random.choice(len(docs), size=n, replace=False)
+        idx = np.random.default_rng(random_seed).choice(len(docs), size=n, replace=False)
         docs = [docs[i] for i in idx]
         embeddings = np.asarray(embeddings)[idx, :]
         st.warning(
@@ -2067,7 +2139,6 @@ else:
             help="Number of keywords per topic. More words give richer topic descriptions but may include less relevant terms. 10-15 is usually a good balance for interpretability."
         )
 
-
         final_stopwords = []
         if use_english_stopwords:
             from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
@@ -2105,6 +2176,7 @@ else:
                 "top_n_words": top_n_words,
             },
             "text_column": selected_text_column,
+            "random_seed": random_seed,
         }
 
     run_button = st.sidebar.button("Run Analysis", type="primary")
@@ -2453,12 +2525,31 @@ else:
                 else:
                     st.caption("Run LLM labelling once to see the provider-returned model id.")
             
-                st.markdown("**System prompt:**")
-                st.code(SYSTEM_PROMPT, language="markdown")
-            
-                st.markdown("**User prompt template:**")
-                st.code(USER_TEMPLATE, language="markdown")
-            
+                st.session_state.setdefault("llm_system_prompt", SYSTEM_PROMPT)
+                st.session_state.setdefault("llm_user_template", USER_TEMPLATE)
+
+                st.markdown("**System prompt** (editable):")
+                st.text_area("System prompt", key="llm_system_prompt", height=200,
+                             label_visibility="collapsed")
+
+                st.markdown(
+                    "**User prompt template** (editable — must keep the "
+                    "`{documents}` and `{keywords}` placeholders):"
+                )
+                st.text_area("User prompt template", key="llm_user_template", height=240,
+                             label_visibility="collapsed")
+
+                if ("{documents}" not in st.session_state["llm_user_template"]
+                        or "{keywords}" not in st.session_state["llm_user_template"]):
+                    st.warning(
+                        "The user template must contain both `{documents}` and `{keywords}` "
+                        "or label generation will fail."
+                    )
+                if st.button("Reset prompts to default", key="llm_reset_prompts"):
+                    st.session_state.pop("llm_system_prompt", None)
+                    st.session_state.pop("llm_user_template", None)
+                    st.rerun()
+
                 example_prompt = st.session_state.get("hf_last_example_prompt")
                 if example_prompt:
                     st.markdown("**Example full prompt for one topic (last run):**")
@@ -2499,6 +2590,8 @@ else:
                         max_topics=max_topics,
                         max_docs_per_topic=max_docs_per_topic,
                         force=force,
+                        system_prompt=st.session_state.get("llm_system_prompt", SYSTEM_PROMPT),
+                        user_template=st.session_state.get("llm_user_template", USER_TEMPLATE),
                     )
                     st.session_state.llm_names = llm_names
                     st.success(f"Generated {len(llm_names)} labels.")
@@ -2618,10 +2711,23 @@ else:
             # st.pyplot(fig)
             # VISUALISATION
             st.subheader("Experiential Topics Visualisation")
-            
+
+            with st.expander("Topic map appearance"):
+                _appc1, _appc2 = st.columns(2)
+                with _appc1:
+                    map_label_size = st.slider(
+                        "Topic label size", 6, 30, 16, 1,
+                        help="Font size of the topic labels on the map.",
+                    )
+                with _appc2:
+                    map_dpi = st.slider(
+                        "Image quality (DPI)", 100, 400, 300, 50,
+                        help="Higher = sharper image (and a bigger file). 300 is print quality.",
+                    )
+
             dataset_title = ds_input.strip() or DATASET_DIR
             plot_title = f"{dataset_title}: MOSAIC's Experiential Topic Map"
-            
+
             fig, _ = datamapplot.create_plot(
                 reduced,
                 labs,
@@ -2630,13 +2736,17 @@ else:
                 figsize=(18, 18),
                 dynamic_label_size=True,
                 dynamic_label_size_scaling_factor=0.85,
-                label_font_size=11,
+                label_font_size=map_label_size,
                 label_wrap_width=15,
                 label_margin_factor=1.5,
                 arrowprops={"arrowstyle": "-", "color": "#333333"}
             )
             fig.suptitle(plot_title, fontsize=16, y=0.99)
-            st.pyplot(fig)
+            # Render a high-DPI PNG and show that (st.pyplot rasterises at a low
+            # default DPI, which looks blurry for this dense map).
+            _map_buf = BytesIO()
+            fig.savefig(_map_buf, format="png", dpi=map_dpi, bbox_inches="tight")
+            st.image(_map_buf.getvalue(), use_container_width=True)
 
             # 2. Interactive Documents & Topics scatter (built directly with plotly)
             _topic_assignments = np.array(tm.topics_)
@@ -2699,7 +2809,7 @@ else:
 
 
             buf = BytesIO()
-            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+            fig.savefig(buf, format="png", dpi=map_dpi, bbox_inches="tight")
             png_bytes = buf.getvalue()
             
             base = os.path.splitext(os.path.basename(CSV_PATH))[0]

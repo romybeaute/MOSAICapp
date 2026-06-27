@@ -245,6 +245,17 @@ ds_input = st.sidebar.text_input(
 )
 DATASET_DIR = _slugify(ds_input).upper()
 
+# Editable label used only to name downloaded files / results. Decoupled from the
+# storage folder above, so you can fix the name AFTER running without recomputing.
+st.session_state.setdefault("export_label_val", "")
+st.sidebar.text_input(
+    "Export name for downloaded files (optional)",
+    key="export_label_val",
+    help="Used to name the files you download (topic summaries, charts, etc.). "
+         "Change it anytime — it does NOT re-run the analysis. "
+         "Leave blank to use the input file name.",
+)
+
 RAW_DIR = raw_path(DATASET_DIR)
 PROC_DIR = proc_path(DATASET_DIR, "preprocessed")
 EVAL_DIR = eval_path(DATASET_DIR)
@@ -424,9 +435,9 @@ SYSTEM_PROMPT = """You are an expert phenomenologist. Your task is to perform a 
 Goal: Identify the invariant structural theme shared by the majority of the reports.
 
 Rules:
-1. FOCUS ON STRUCTURE, NOT CONTENT: Do not label the specific object seen (e.g., "Night sky", "Monster"), but the mode of experience (e.g., "Sense of vastness", "Perceiving threatening entities").
+1. FOCUS ON STRUCTURE, NOT CONTENT: Do not label the specific object seen (e.g., "Night sky", "Monster"), but the mode of experience (e.g., "Vastness", "Threatening entities").
 2. AVOID OUTLIERS: If a specific detail (like a specific location or object) appears in only 1-2 reports, IGNORE IT.
-3. BE CONCISE: Use scientifically precise noun phrases (3-8 words).
+3. BE CONCISE: Use scientifically precise NOUN PHRASES (2-6 words). Prefer naming the phenomenon directly. AVOID starting labels with gerunds such as "Experiencing", "Perceiving", "Feeling", "Sense of" unless truly essential (e.g. "Threatening entities", not "Perceiving threatening entities"; "Bodily heat and tingling", not "Experiencing bodily heat").
 4. NO META-COMMENTARY: Output ONLY the label. Do not use quotes or introductory text.
 """
 
@@ -446,6 +457,30 @@ Critical Constraints:
 3. If the cluster is generic (e.g. just "feeling good"), use a generic label. Do not force a specific image if it isn't there.
 
 Output ONLY the label (3-8 words):"""
+
+
+# Persist user-edited prompts across sessions/reloads (ephemeral on a HF Space
+# container, durable locally).
+_USER_PROMPTS_FILE = Path(__file__).parent / ".mosaic_user_prompts.json"
+
+def _load_saved_prompts() -> tuple[str | None, str | None]:
+    try:
+        if _USER_PROMPTS_FILE.exists():
+            d = json.loads(_USER_PROMPTS_FILE.read_text(encoding="utf-8"))
+            return d.get("system"), d.get("user")
+    except Exception:
+        pass
+    return None, None
+
+def _save_prompts(system_prompt: str, user_template: str) -> bool:
+    try:
+        _USER_PROMPTS_FILE.write_text(
+            json.dumps({"system": system_prompt, "user": user_template}),
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _clean_label(x: str) -> str:
@@ -768,6 +803,21 @@ class _ZSDummyClustering:
 def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model_name, dataset_key=""):
     """Run BERTopic zero-shot classification against a fixed list of categories."""
     emb_model = load_embedding_model(embedding_model_name)
+
+    # Guard: the category labels are encoded with `embedding_model_name`, while the
+    # documents use the (possibly precomputed) `_embeddings`. If the dimensions
+    # differ, BERTopic fails deep inside with a cryptic matrix-shape error — catch
+    # it here with an actionable message instead.
+    _doc_dim = np.asarray(_embeddings).shape[1]
+    _cat_dim = np.asarray(emb_model.encode(["dimension probe"])).shape[1]
+    if _cat_dim != _doc_dim:
+        raise ValueError(
+            f"Embedding-model mismatch: your document embeddings are {_doc_dim}-dim, "
+            f"but '{embedding_model_name}' produces {_cat_dim}-dim vectors. "
+            "Select the SAME embedding model in the sidebar that you used to create "
+            "the precomputed .npy (e.g. Qwen/Qwen3-Embedding-4B → 2560-dim)."
+        )
+
     topic_model = BERTopic(
         embedding_model=emb_model,
         umap_model=_ZSPassThrough(),
@@ -1184,6 +1234,10 @@ else:  # "Load precomputed embeddings (.npy + docs)"
         f"Loaded {len(_docs_list)} precomputed documents into a private session "
         "workspace (not shared with other users)."
     )
+    # Remember the uploaded filename so the embedding-model selector below can
+    # auto-match the model used to create the .npy (critical: zero-shot and word
+    # features re-encode text and must produce the same vector dimension).
+    st.session_state["_precomputed_npy_name"] = up_emb.name
     PRECOMPUTED_MODE = True
 
 if CSV_PATH is None:
@@ -1298,17 +1352,34 @@ def _detect_model_from_filename(filename: str) -> str | None:
 
 st.sidebar.header("Model Selection")
 
+# In precomputed mode, default to the model detected in the uploaded .npy name so
+# category/word re-encoding matches the precomputed document embedding dimension.
+_pre_detected_model = (
+    _detect_model_from_filename(st.session_state.get("_precomputed_npy_name", ""))
+    if PRECOMPUTED_MODE else None
+)
+_emb_default_idx = (
+    list(ALL_EMBEDDING_MODELS).index(_pre_detected_model)
+    if _pre_detected_model in ALL_EMBEDDING_MODELS else 0
+)
 selected_embedding_model = st.sidebar.selectbox(
     "Choose an embedding model",
-    (
-        "BAAI/bge-small-en-v1.5",
-        "intfloat/multilingual-e5-large-instruct",
-        "Qwen/Qwen3-Embedding-0.6B",
-        "Qwen/Qwen3-Embedding-4B",
-        "sentence-transformers/all-mpnet-base-v2",
-    ),
+    ALL_EMBEDDING_MODELS,
+    index=_emb_default_idx,
     help="Unsure which model to pick? Check the [MTEB Leaderboard](https://huggingface.co/spaces/mteb/leaderboard) for performance maximising on Clustering and STS tasks."
 )
+if PRECOMPUTED_MODE:
+    if _pre_detected_model:
+        st.sidebar.caption(
+            f"⚠️ Keep this on **{_pre_detected_model}** — it's the model that made your "
+            "uploaded embeddings. Zero-shot and word features re-encode text and will "
+            "fail with a dimension mismatch if it doesn't match."
+        )
+    else:
+        st.sidebar.caption(
+            "⚠️ Select the **same embedding model** you used to create the uploaded "
+            ".npy, or zero-shot / word features will fail with a dimension mismatch."
+        )
 
 selected_device = st.sidebar.radio(
     "Processing device",
@@ -2606,20 +2677,36 @@ else:
 
 
 
-            model_id = st.text_input(
-                "HF model id for labelling",
-                value="meta-llama/Meta-Llama-3-8B-Instruct",
+            _LLM_PRESETS = (
+                "meta-llama/Llama-3.1-8B-Instruct",
+                "meta-llama/Meta-Llama-3-8B-Instruct",
+                "mistralai/Mistral-7B-Instruct-v0.3",
+                "Custom (type your own)…",
+            )
+            _llm_choice = st.selectbox(
+                "LLM for labelling",
+                _LLM_PRESETS,
+                index=0,
+                key="llm_model_choice",
                 help="""
                 **Must be a model supported by the Hugging Face Serverless Inference API.**
-                
-                **Recommended Models:**
-                * `meta-llama/Meta-Llama-3-8B-Instruct` (Free tier friendly, fast)
-                * `meta-llama/Llama-3.1-8B-Instruct` (Newer, smarter, but may require HF PRO)
+
+                * `meta-llama/Llama-3.1-8B-Instruct` (Newer, smarter; may require HF PRO)
+                * `meta-llama/Meta-Llama-3-8B-Instruct` (Free-tier friendly, fast)
                 * `mistralai/Mistral-7B-Instruct-v0.3` (Strict instruction following)
 
-                [Check supported models](https://huggingface.co/models?pipeline_tag=text-generation&inference=warm&sort=trending)
-                """
+                Pick *Custom* to enter any other supported model id.
+                [Browse supported models](https://huggingface.co/models?pipeline_tag=text-generation&inference=warm&sort=trending)
+                """,
             )
+            if _llm_choice.startswith("Custom"):
+                model_id = st.text_input(
+                    "HF model id for labelling",
+                    value=st.session_state.get("llm_custom_model", "meta-llama/Llama-3.1-8B-Instruct"),
+                    key="llm_custom_model",
+                )
+            else:
+                model_id = _llm_choice
 
             with st.expander("Show LLM configuration and prompts"):
                 st.markdown(f"**HF model id (requested):** `{model_id}`")
@@ -2634,8 +2721,11 @@ else:
                 else:
                     st.caption("Run LLM labelling once to see the provider-returned model id.")
             
-                st.session_state.setdefault("llm_system_prompt", SYSTEM_PROMPT)
-                st.session_state.setdefault("llm_user_template", USER_TEMPLATE)
+                _saved_sys, _saved_usr = _load_saved_prompts()
+                st.session_state.setdefault("llm_system_prompt", _saved_sys or SYSTEM_PROMPT)
+                st.session_state.setdefault("llm_user_template", _saved_usr or USER_TEMPLATE)
+                if _saved_sys or _saved_usr:
+                    st.caption("✅ Loaded your saved prompts.")
 
                 st.markdown("**System prompt** (editable):")
                 st.text_area("System prompt", key="llm_system_prompt", height=200,
@@ -2654,10 +2744,25 @@ else:
                         "The user template must contain both `{documents}` and `{keywords}` "
                         "or label generation will fail."
                     )
-                if st.button("Reset prompts to default", key="llm_reset_prompts"):
-                    st.session_state.pop("llm_system_prompt", None)
-                    st.session_state.pop("llm_user_template", None)
-                    st.rerun()
+                _csave, _creset = st.columns(2)
+                with _csave:
+                    if st.button("💾 Save as my default", key="llm_save_prompts",
+                                 use_container_width=True):
+                        if _save_prompts(st.session_state["llm_system_prompt"],
+                                         st.session_state["llm_user_template"]):
+                            st.success("Saved — these load automatically next time.")
+                        else:
+                            st.warning("Could not save (read-only environment).")
+                with _creset:
+                    if st.button("Reset to default", key="llm_reset_prompts",
+                                 use_container_width=True):
+                        st.session_state.pop("llm_system_prompt", None)
+                        st.session_state.pop("llm_user_template", None)
+                        try:
+                            _USER_PROMPTS_FILE.unlink()
+                        except Exception:
+                            pass
+                        st.rerun()
 
                 example_prompt = st.session_state.get("hf_last_example_prompt")
                 if example_prompt:
@@ -2921,7 +3026,8 @@ else:
             fig.savefig(buf, format="png", dpi=map_dpi, bbox_inches="tight")
             png_bytes = buf.getvalue()
             
-            base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            base = (st.session_state.get("export_label_val", "").strip()
+                    or os.path.splitext(os.path.basename(CSV_PATH))[0])
             gran = "sentences" if selected_granularity else "reports"
             png_name = f"topics_{base}_{gran}_plot.png"
             
@@ -3090,7 +3196,8 @@ else:
             if "report_ids" in export_csv.columns:
                 export_csv["report_ids"] = export_csv["report_ids"].apply(lambda lst: str(list(lst)))
 
-            base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            base = (st.session_state.get("export_label_val", "").strip()
+                    or os.path.splitext(os.path.basename(CSV_PATH))[0])
             gran = "sentences" if selected_granularity else "reports"
             
 
@@ -3380,7 +3487,8 @@ else:
                 st.dataframe(unclass_sentences.head(50).to_frame("sentence"), use_container_width=True)
 
             # Download full results
-            zs_base = os.path.splitext(os.path.basename(CSV_PATH))[0]
+            zs_base = (st.session_state.get("export_label_val", "").strip()
+                       or os.path.splitext(os.path.basename(CSV_PATH))[0])
             st.download_button(
                 "Download full classification results (CSV)",
                 data=zs_df.to_csv(index=False).encode("utf-8-sig"),

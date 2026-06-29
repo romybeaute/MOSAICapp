@@ -99,23 +99,52 @@ to use the new, extended version, with zero-shot and comparison between datasets
 CSV file with a text column. The app auto-detects columns named `text`, `report`, `reflection_answer`, or `reflection_answer_english`. Any column can also be selected manually.
 
 
-### LLM Setup (Optional)
-To use the Automated Topic Labelling feature (Llama-3), you must provide a Hugging Face Access Token. The app uses this token to access the inference API.
+### LLM Topic Labelling — Hugging Face token setup (optional)
 
-1. Get a Token: Log in to Hugging Face and create a token with "Read" permissions.
+The **Automated Topic Labelling** feature turns each topic's keywords into a
+readable label using a hosted Llama-3 model via the Hugging Face Inference API.
+This is the **only** feature that needs a token — embedding, topic modelling,
+zero-shot classification and condition comparison all work **without** one.
 
-2. Configure Local App:
+If you try to label topics without a token you'll see:
 
-- Create a folder named .streamlit in your root directory.
+> `LLM labelling failed: No HF_TOKEN found in env/secrets.`
 
-- Inside it, create a file named secrets.toml.
+To enable it:
 
-- Add your token in TOML file:
+**Step 1 — Create a free Hugging Face token**
+1. Sign in (or sign up) at <https://huggingface.co>.
+2. Open **Settings → Access Tokens**: <https://huggingface.co/settings/tokens>.
+3. Click **Create new token**, give it a name, select the **Read** role, and copy
+   the value (it starts with `hf_...`).
+   *If you create a fine-grained token instead, also tick
+   "Make calls to Inference Providers" so the labelling API works.*
+
+**Step 2 — Give the token to the app** (pick ONE option)
+
+*Option A — secrets file (recommended). From the repo root:*
+```bash
+mkdir -p .streamlit
+printf 'HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxx"\n' > .streamlit/secrets.toml
 ```
-HF_TOKEN = "hf_..."
+This creates `.streamlit/secrets.toml` containing a single line:
+```toml
+HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxx"
+```
+The file lives inside your repo folder but is already listed in `.gitignore`,
+so it is **never committed**.
+
+*Option B — environment variable (good for a one-off session):*
+```bash
+export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxx"   # add to ~/.zshrc or ~/.bashrc to persist
+streamlit run app2.py
 ```
 
-- Note: This file is ignored by Git to protect your credentials.
+**Step 3 — Restart the app** (`streamlit run app2.py`). Topic labelling now works.
+
+> ⚠️ **Never paste your token into code, notebooks, or any committed file.**
+> If a token is ever exposed, revoke it on the
+> [tokens page](https://huggingface.co/settings/tokens) and create a new one.
 
 
 ---

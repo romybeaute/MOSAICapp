@@ -828,7 +828,12 @@ def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model
         verbose=False,
     )
     topics, _ = topic_model.fit_transform(list(_docs), np.asarray(_embeddings))
-    return topics, topic_model.get_topic_info(), topic_model
+    # NOTE: do NOT return topic_model here. @st.cache_data pickles the entire
+    # return value, and topic_model holds a reference to the (possibly multi-GB)
+    # embedding model — serializing that hangs for minutes and can OOM/crash the
+    # Space, dumping the user back to the first tab. Both call sites discard the
+    # third value, so return None for it.
+    return topics, topic_model.get_topic_info(), None
 
 
 # =====================================================================

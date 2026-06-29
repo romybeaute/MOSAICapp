@@ -1534,6 +1534,154 @@ Touching World and Self
 Mental Agency
 Witness Consciousness"""
 
+# Built-in questionnaire / category sets the user can load into the zero-shot
+# classifier. Keys are the names shown in the picker.
+_BUILTIN_QUESTIONNAIRES = {
+    "MPE92": _ZS_DEFAULT_CATEGORIES,
+    "11D-ASC": """\
+Experience of Unity
+Spiritual Experience
+Blissful State
+Insightfulness
+Disembodiment
+Impaired Control and Cognition
+Anxiety
+Complex Imagery
+Elementary Imagery
+Audio-Visual Synaesthesia
+Changed Meaning of Percepts""",
+}
+
+# User-saved questionnaires persist across sessions (ephemeral on a HF Space
+# container, durable locally) — same approach as the saved prompts.
+_USER_QUESTIONNAIRES_FILE = Path(__file__).parent / ".mosaic_questionnaires.json"
+
+
+def _load_saved_questionnaires() -> dict[str, str]:
+    try:
+        if _USER_QUESTIONNAIRES_FILE.exists():
+            d = json.loads(_USER_QUESTIONNAIRES_FILE.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return {str(k): str(v) for k, v in d.items()}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_questionnaire(name: str, categories_text: str) -> bool:
+    try:
+        d = _load_saved_questionnaires()
+        d[name] = categories_text
+        _USER_QUESTIONNAIRES_FILE.write_text(
+            json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _delete_questionnaire(name: str) -> bool:
+    try:
+        d = _load_saved_questionnaires()
+        if name in d:
+            del d[name]
+            _USER_QUESTIONNAIRES_FILE.write_text(
+                json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        return True
+    except Exception:
+        return False
+
+
+_SAVED_SUFFIX = " (saved)"
+
+
+def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
+    """Render the questionnaire preset picker + editable categories text area.
+
+    Lets the user load a built-in questionnaire (MPE92, 11D-ASC, …) or any
+    previously saved set, edit the list freely, and save the current list under
+    a new name for future use. Returns the raw categories text (one per line).
+    """
+    saved = _load_saved_questionnaires()
+    ta_key = f"{key_prefix}_categories"
+    preset_key = f"{key_prefix}_preset"
+
+    builtin_opts = list(_BUILTIN_QUESTIONNAIRES.keys())
+    saved_opts = [f"{n}{_SAVED_SUFFIX}" for n in saved]
+    options = builtin_opts + saved_opts
+
+    def _preset_text(label: str) -> str:
+        if label in _BUILTIN_QUESTIONNAIRES:
+            return _BUILTIN_QUESTIONNAIRES[label]
+        if label.endswith(_SAVED_SUFFIX):
+            return saved.get(label[: -len(_SAVED_SUFFIX)], "")
+        return ""
+
+    def _on_preset_change():
+        st.session_state[ta_key] = _preset_text(st.session_state[preset_key])
+
+    st.selectbox(
+        "Questionnaire / category set",
+        options,
+        key=preset_key,
+        on_change=_on_preset_change,
+        help="Pick a predefined questionnaire to load its dimensions, or edit the "
+             "list below and save it under a new name for future use.",
+    )
+
+    # Initialise the text area once from the currently selected preset.
+    if ta_key not in st.session_state:
+        st.session_state[ta_key] = _preset_text(options[0]) if options else ""
+
+    raw = st.text_area(
+        "Categories — one per line (edit freely)",
+        height=height,
+        key=ta_key,
+        help="These are the predefined topics you want to classify documents into. "
+             "Each line is one dimension/category. Edit or replace them, then "
+             "optionally save the set below.",
+    )
+
+    with st.expander("Save / manage category sets"):
+        sc1, sc2 = st.columns([3, 1])
+        with sc1:
+            new_name = st.text_input(
+                "Save current list as", key=f"{key_prefix}_save_name",
+                placeholder="e.g. 11D-ASC",
+            )
+        with sc2:
+            st.write("")
+            st.write("")
+            if st.button("Save", key=f"{key_prefix}_save_btn"):
+                nm = new_name.strip()
+                if not nm:
+                    st.warning("Enter a name first.")
+                elif nm in _BUILTIN_QUESTIONNAIRES:
+                    st.warning("That name is reserved by a built-in set. Choose another.")
+                elif _save_questionnaire(nm, st.session_state[ta_key]):
+                    st.success(f"Saved '{nm}'. It now appears in the dropdown above.")
+                    st.rerun()
+                else:
+                    st.error("Could not save (the filesystem may be read-only here).")
+
+        if saved:
+            dc1, dc2 = st.columns([3, 1])
+            with dc1:
+                del_name = st.selectbox(
+                    "Delete a saved set", ["—"] + list(saved.keys()),
+                    key=f"{key_prefix}_del_sel",
+                )
+            with dc2:
+                st.write("")
+                st.write("")
+                if st.button("Delete", key=f"{key_prefix}_del_btn"):
+                    if del_name != "—":
+                        _delete_questionnaire(del_name)
+                        st.rerun()
+
+    return raw
+
 
 def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None:
     """Render the full condition-comparison UI.
@@ -1563,12 +1711,21 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     with sim_col:
         cond_threshold = st.slider(
             "Match threshold (correlation)",
-            min_value=0.0, max_value=0.90, value=0.45, step=0.01,
+            min_value=0.0, max_value=0.90, value=0.50, step=0.01,
             key=f"cond_thresh{key_suffix}",
-            help="Topic pairs scoring above this value are considered 'shared'. "
-                 "This is a correlation-like score (centered cosine): ≥0.45 is a "
-                 "strong/solid match, 0.30–0.45 is moderate, ~0 is unrelated, and "
-                 "negative means the topics actively contrast.",
+            help="Topic pairs scoring above this value are considered 'shared'.\n\n"
+                 "This is **not raw cosine similarity** — it's a *centered* cosine "
+                 "(the shared component every text has is removed first), so it "
+                 "behaves like a **correlation**: 0 = unrelated, +1 = identical "
+                 "theme, negative = contrasting.\n\n"
+                 "Raw cosine between any two sentences is almost always high "
+                 "(~0.6–0.9), even for unrelated topics, because all text sits in a "
+                 "narrow region of the embedding space. Centering removes that "
+                 "baseline, so the scale spreads out and shrinks toward 0. That's "
+                 "why a value that looks modest is actually strong here — just like "
+                 "a Pearson correlation of r≈0.5 is a strong effect.\n\n"
+                 "**Guide:** ≥0.50 strong/solid · 0.30–0.50 moderate · ~0 unrelated · "
+                 "negative = actively contrasting.",
         )
     with thresh_col:
         st.info(
@@ -1884,12 +2041,7 @@ if not os.path.exists(EMBEDDINGS_FILE):
             else:
                 st.warning("Could not auto-detect the embedding model from the filename. Please select the correct model above.")
 
-            sa_zs_categories_raw = st.text_area(
-                "Categories — one per line",
-                value=_ZS_DEFAULT_CATEGORIES,
-                height=220,
-                key="sa_zs_categories",
-            )
+            sa_zs_categories_raw = _zs_categories_input("sa_zs", height=220)
             sa_zs_min_sim = st.slider(
                 "Minimum similarity threshold",
                 min_value=0.1, max_value=0.9, value=0.5, step=0.05,
@@ -3321,13 +3473,7 @@ else:
             "Uses the same preprocessed docs and embeddings as the main pipeline — no extra embedding step needed."
         )
 
-        zs_categories_raw = st.text_area(
-            "Categories — one per line (edit freely)",
-            value=_ZS_DEFAULT_CATEGORIES,
-            height=260,
-            help="These are the predefined topics you want to classify documents into. "
-                 "Edit or replace them with categories relevant to your dataset.",
-        )
+        zs_categories_raw = _zs_categories_input("zs", height=260)
 
         zs_col1, zs_col2 = st.columns([1, 2])
         with zs_col1:

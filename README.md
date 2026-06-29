@@ -55,7 +55,9 @@ If the space is sleeping, contact me (r.beaut@sussex.ac.uk) to restart it.
 Run the app on your own machine to use custom GPUs, process sensitive data locally, or modify the code.
 
 ### Prerequisites
-- Python 3.9+
+- **Python 3.11–3.13** — recommended, and required for the pinned `requirements.lock.txt`
+  (it ships NumPy 2.x, which needs Python ≥ 3.11). Python 3.9–3.10 still works with the
+  flexible `requirements.txt`.
 - Git
 
 
@@ -69,8 +71,11 @@ cd MOSAICapp
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies and the package
-pip install -r requirements.txt
+# Install dependencies and the package.
+# Recommended for tutorials — exact, tested versions (needs Python 3.11–3.13):
+pip install -r requirements.lock.txt
+# Alternative — latest compatible versions (also works on Python 3.9–3.10):
+#   pip install -r requirements.txt
 pip install .
 
 # Download NLTK data (required for segmentation)

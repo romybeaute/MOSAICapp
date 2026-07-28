@@ -30,6 +30,7 @@ import zipfile
 
 
 import hashlib
+import time
 import uuid
 from datetime import datetime
 import altair as alt
@@ -37,7 +38,7 @@ import altair as alt
 from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
 import seaborn as sns
-from scipy.stats import chi2_contingency
+from scipy.stats import chi2_contingency, norm
 from sklearn.metrics.pairwise import cosine_similarity
 import plotly.graph_objects as go
 import plotly.express as px
@@ -384,8 +385,42 @@ HISTORY_FILE = str(PROC_DIR / "run_history.json")
 
 @st.cache_resource
 def load_embedding_model(model_name):
-    st.info(f"Loading embedding model '{model_name}'...")
-    return SentenceTransformer(model_name)
+    """Load a sentence-transformer, in half precision when a GPU is available.
+
+    Large embedding models (Qwen3-Embedding-4B is 4.0B parameters) need ~16 GB in
+    float32. On a 32 GB Mac that pushes the machine into swap and embedding slows
+    to a crawl or never finishes. fp16 halves it to ~8 GB and the numbers are
+    equivalent for this purpose: measured against fp32, per-sentence cosine
+    agreement is 0.999999 and the largest change in a pairwise similarity matrix
+    is 0.0003 — far below any threshold the app uses.
+
+    fp16 is applied only on GPU. On CPU, float16 has poor kernel coverage in
+    PyTorch and is typically *slower* than float32, so CPU keeps full precision.
+    """
+    import torch
+
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
+    st.info(f"Loading embedding model '{model_name}' on {device}"
+            f"{' (half precision)' if device != 'cpu' else ''}…")
+    if device == "cpu":
+        return SentenceTransformer(model_name, device=device)
+    try:
+        return SentenceTransformer(model_name, device=device,
+                                   model_kwargs={"dtype": torch.float16})
+    except Exception:
+        # sentence-transformers < 5 / older transformers spell this `torch_dtype`;
+        # if half precision is unavailable for this model, fall back to fp32.
+        try:
+            return SentenceTransformer(model_name, device=device,
+                                       model_kwargs={"torch_dtype": torch.float16})
+        except Exception:
+            return SentenceTransformer(model_name, device=device)
 
 
 
@@ -786,54 +821,331 @@ def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
 # 5b. Zero-shot helpers
 # =====================================================================
 
-class _ZSPassThrough:
-    """Dummy UMAP that passes embeddings unchanged (zero-shot doesn't need dim-reduction)."""
-    def fit(self, X, y=None): return self
-    def transform(self, X): return X
+def _zs_parse_categories(raw: str) -> tuple[list[str], list[str], list[str]]:
+    """Parse the categories text area into (labels, line_labels, line_texts).
 
-class _ZSDummyClustering:
-    """Dummy HDBSCAN that marks every doc as outlier so zero-shot does all the work."""
-    def __init__(self): self.labels_ = None
-    def fit(self, X, y=None):
-        self.labels_ = np.array([-1] * len(X))
-        return self
+    Each non-empty line is either a bare label ("Anxiety") or
+    "Label | description of what belongs to it" — the description is embedded
+    together with the label, which anchors the category vector in the same
+    register as real sentences instead of an abstract two-word title.
+    Several lines may share the same label (e.g. one questionnaire item per
+    line); a document's similarity to a label is the max over that label's lines.
+    """
+    labels: list[str] = []
+    line_labels: list[str] = []
+    line_texts: list[str] = []
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "|" in line:
+            label, desc = line.split("|", 1)
+            label, desc = label.strip(), desc.strip()
+            text = f"{label}: {desc}" if desc else label
+        else:
+            label, text = line, line
+        if not label:
+            continue
+        if label not in labels:
+            labels.append(label)
+        line_labels.append(label)
+        line_texts.append(text)
+    return labels, line_labels, line_texts
+
+
+def _zs_embeddings_fingerprint(embeddings: np.ndarray) -> str:
+    """Cheap content hash of the document embeddings for cache keying.
+
+    Hashing the full array can be slow for large corpora × high-dim models,
+    so hash the shape plus a strided sample of rows — enough to distinguish
+    two datasets that happen to have the same number of documents."""
+    arr = np.ascontiguousarray(embeddings)
+    step = max(1, len(arr) // 512)
+    h = hashlib.sha1()
+    h.update(str(arr.shape).encode())
+    h.update(arr[::step].tobytes())
+    return h.hexdigest()
 
 
 @st.cache_data
-def run_zeroshot(_docs, _embeddings, categories, min_similarity, embedding_model_name, dataset_key=""):
-    """Run BERTopic zero-shot classification against a fixed list of categories."""
-    emb_model = load_embedding_model(embedding_model_name)
+def compute_zeroshot_similarities(_embeddings, emb_fingerprint, line_texts, embedding_model_name):
+    """Cosine similarity between every document and every category line.
 
-    # Guard: the category labels are encoded with `embedding_model_name`, while the
-    # documents use the (possibly precomputed) `_embeddings`. If the dimensions
-    # differ, BERTopic fails deep inside with a cryptic matrix-shape error — catch
-    # it here with an actionable message instead.
-    _doc_dim = np.asarray(_embeddings).shape[1]
-    _cat_dim = np.asarray(emb_model.encode(["dimension probe"])).shape[1]
-    if _cat_dim != _doc_dim:
+    This is the expensive, threshold-independent half of zero-shot
+    classification (the same computation BERTopic performs internally with
+    `zeroshot_topic_list`): encode the category lines, then compare them to
+    the precomputed document embeddings. `_embeddings` is excluded from the
+    cache key (leading underscore); `emb_fingerprint` stands in for it.
+    """
+    emb_model = load_embedding_model(embedding_model_name)
+    doc_emb = np.asarray(_embeddings)
+
+    # Guard: the category lines are encoded with `embedding_model_name`, while
+    # the documents use the (possibly precomputed) `_embeddings`. If the
+    # dimensions differ, fail here with an actionable message instead of a
+    # cryptic matrix-shape error.
+    cat_emb = np.asarray(emb_model.encode(list(line_texts), convert_to_numpy=True))
+    if cat_emb.shape[1] != doc_emb.shape[1]:
         raise ValueError(
-            f"Embedding-model mismatch: your document embeddings are {_doc_dim}-dim, "
-            f"but '{embedding_model_name}' produces {_cat_dim}-dim vectors. "
+            f"Embedding-model mismatch: your document embeddings are {doc_emb.shape[1]}-dim, "
+            f"but '{embedding_model_name}' produces {cat_emb.shape[1]}-dim vectors. "
             "Select the SAME embedding model in the sidebar that you used to create "
             "the precomputed .npy (e.g. Qwen/Qwen3-Embedding-4B → 2560-dim)."
         )
+    return cosine_similarity(doc_emb, cat_emb)
 
-    topic_model = BERTopic(
-        embedding_model=emb_model,
-        umap_model=_ZSPassThrough(),
-        hdbscan_model=_ZSDummyClustering(),
-        vectorizer_model=CountVectorizer(stop_words="english"),
-        zeroshot_topic_list=list(categories),
-        zeroshot_min_similarity=min_similarity,
-        verbose=False,
+
+def apply_zeroshot_threshold(line_sims, labels, line_labels, min_similarity, min_margin=0.0):
+    """Turn the doc × category-line similarity matrix into assignments.
+
+    A label's similarity is the max over its lines. A document is assigned to
+    its best label when best similarity ≥ min_similarity AND the best label
+    beats the runner-up by ≥ min_margin (ambiguous docs sit between category
+    vectors; the margin filter leaves them Unclassified). Pure numpy — cheap
+    enough to re-run live whenever a slider moves.
+
+    Returns (topics, topic_info, per_doc) where `topics` is a list with -1 for
+    unclassified, `topic_info` mirrors BERTopic's get_topic_info columns
+    (Topic / Name / Count, only categories with Count > 0, plus the -1 row),
+    and `per_doc` holds best_category / confidence / margin / runner_up for
+    every document regardless of threshold.
+    """
+    labels = list(labels)
+    label_sims = np.column_stack([
+        line_sims[:, [i for i, ll in enumerate(line_labels) if ll == lab]].max(axis=1)
+        for lab in labels
+    ])
+    n = label_sims.shape[0]
+    order = np.argsort(-label_sims, axis=1)
+    best = order[:, 0]
+    best_sim = label_sims[np.arange(n), best]
+    if len(labels) > 1:
+        second = order[:, 1]
+        margin = best_sim - label_sims[np.arange(n), second]
+        runner_up = [labels[i] for i in second]
+    else:
+        margin = np.full(n, np.inf)
+        runner_up = [""] * n
+
+    assigned = (best_sim >= min_similarity) & (margin >= min_margin)
+    topics = np.where(assigned, best, -1)
+
+    rows = []
+    counts = np.bincount(topics[assigned], minlength=len(labels)) if assigned.any() else np.zeros(len(labels), int)
+    for i, lab in enumerate(labels):
+        if counts[i] > 0:
+            rows.append({"Topic": i, "Name": lab, "Count": int(counts[i])})
+    rows.append({"Topic": -1, "Name": "Unclassified", "Count": int((~assigned).sum())})
+    topic_info = pd.DataFrame(rows, columns=["Topic", "Name", "Count"])
+
+    per_doc = pd.DataFrame({
+        "best_category": [labels[i] for i in best],
+        "confidence": np.round(best_sim, 4),
+        "margin": np.round(np.where(np.isfinite(margin), margin, np.nan), 4),
+        "runner_up": runner_up,
+    })
+    return topics.tolist(), topic_info, per_doc
+
+
+def _zs_similarity_histogram(best_sim, min_similarity, min_margin, margin):
+    """Histogram of per-document best similarities with the threshold marked —
+    raw cosine values are model- and corpus-dependent, so the informative
+    threshold range has to be read off this distribution, not guessed."""
+    fig, ax = plt.subplots(figsize=(10, 2.8))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("#f8f9fa")
+    ax.hist(best_sim, bins=60, color="#8da0cb", edgecolor="white", linewidth=0.4)
+    ax.axvline(min_similarity, color="#d62728", linestyle="--", linewidth=1.5,
+               label=f"threshold = {min_similarity:.2f}")
+    pct = 100 * (np.asarray(best_sim) >= min_similarity).mean()
+    if min_margin > 0:
+        _m = np.nan_to_num(np.asarray(margin, dtype=float), nan=np.inf)
+        pct = 100 * ((np.asarray(best_sim) >= min_similarity) & (_m >= min_margin)).mean()
+    ax.set_xlabel("Best category similarity per document", fontsize=9, color="#555555")
+    ax.set_ylabel("Documents", fontsize=9, color="#555555")
+    ax.legend(fontsize=8, loc="upper right")
+    ax.set_title(f"{pct:.1f}% of documents pass the current threshold(s)",
+                 fontsize=10, color="#333333")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.tick_params(labelsize=8, colors="#777777")
+    plt.tight_layout(pad=1.0)
+    return fig
+
+
+def _json_len(path) -> int:
+    """Number of entries in a JSON file, or -1 if it cannot be read."""
+    try:
+        with open(path) as f:
+            return len(json.load(f))
+    except Exception:
+        return -1
+
+
+def _topics_coverage(path) -> int:
+    """How many documents a saved topics file actually assigns (outliers excluded).
+
+    Used to default the cross-reference to the assignment that covers most of the
+    corpus — normally the outlier-reduced run rather than the raw one.
+    """
+    try:
+        with open(path) as f:
+            return sum(1 for t in json.load(f) if t != -1)
+    except Exception:
+        return -1
+
+
+# Which topics/labels file the user picked, per dataset — so the cross-reference
+# comes back on the right pair after a restart instead of re-guessing. Same
+# approach as the saved prompts and questionnaires.
+_XREF_PREFS_FILE = Path(__file__).parent / ".mosaic_xref_prefs.json"
+
+
+def _load_xref_prefs() -> dict:
+    try:
+        if _XREF_PREFS_FILE.exists():
+            d = json.loads(_XREF_PREFS_FILE.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+
+def _save_xref_pref(dataset: str, topics_name: str, labels_name: str) -> None:
+    try:
+        d = _load_xref_prefs()
+        if d.get(dataset) == {"topics": topics_name, "labels": labels_name}:
+            return  # nothing changed — don't rewrite on every rerun
+        d[dataset] = {"topics": topics_name, "labels": labels_name}
+        _XREF_PREFS_FILE.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _xref_default_index(files, remembered_name, score=None) -> int:
+    """Index of the remembered file; else the best-scoring one; else the first."""
+    if not files:
+        return 0
+    names = [f.name for f in files]
+    if remembered_name in names:
+        return names.index(remembered_name)
+    if score is not None:
+        return max(range(len(files)), key=lambda i: score(files[i]))
+    return 0
+
+
+def _zs_rank_ramp(n: int) -> np.ndarray:
+    """Evenly spaced colormap positions for `n` bars, sorted low → high.
+
+    Topic counts are heavily skewed (one dominant category, a long tail of small
+    ones), so scaling colour by *value* pushes almost every bar into the same
+    narrow slice of the ramp and they become indistinguishable. Spacing by rank
+    instead uses the full colormap, so every bar gets a visibly different colour.
+    Colour then encodes order, not magnitude — the bar length already carries
+    magnitude.
+    """
+    if n <= 0:
+        return np.array([])
+    if n == 1:
+        return np.array([0.6])
+    return np.linspace(0.0, 1.0, n)
+
+
+def _zs_uncovered_topics_ui(bt_labels, zs_categories, min_similarity, key_prefix=""):
+    """Show which MOSAIC topics the zero-shot categories fail to capture.
+
+    A topic's "% not captured" is the share of its sentences left Unclassified.
+    High values flag experiential content the category set (questionnaire) has
+    no vector for — a property of the instrument, not a modelling error.
+    BERTopic outliers are excluded: they are not topics.
+    """
+    df = pd.DataFrame({"bt_label": list(bt_labels), "category": list(zs_categories)})
+    df = df[~df["bt_label"].isin(("Outlier", "Unlabelled", "Unclassified"))]
+    if df.empty:
+        return
+
+    rows = []
+    for label, grp in df.groupby("bt_label"):
+        n = len(grp)
+        n_unc = int((grp["category"] == "Unclassified").sum())
+        named = grp.loc[grp["category"] != "Unclassified", "category"].value_counts()
+        rows.append({
+            "MOSAIC topic": label,
+            "Sentences": n,
+            "% not captured": round(100 * n_unc / n, 1),
+            "Closest category": named.index[0] if len(named) else "—",
+            "% in closest": round(100 * named.iloc[0] / n, 1) if len(named) else 0.0,
+        })
+    unc = (pd.DataFrame(rows)
+           .sort_values("% not captured", ascending=False)
+           .reset_index(drop=True))
+
+    st.subheader("MOSAIC topics not captured by your categories")
+    st.caption(
+        f"Share of each MOSAIC topic left **Unclassified** at threshold "
+        f"{min_similarity:.2f} — content your category set has no vector for. "
+        "A high value means the topic is phenomenology the top-down instrument "
+        "misses, not a clustering error."
     )
-    topics, _ = topic_model.fit_transform(list(_docs), np.asarray(_embeddings))
-    # NOTE: do NOT return topic_model here. @st.cache_data pickles the entire
-    # return value, and topic_model holds a reference to the (possibly multi-GB)
-    # embedding model — serializing that hangs for minutes and can OOM/crash the
-    # Space, dumping the user back to the first tab. Both call sites discard the
-    # third value, so return None for it.
-    return topics, topic_model.get_topic_info(), None
+
+    n_total = len(df)
+    n_unc = int((df["category"] == "Unclassified").sum())
+    mostly = unc[unc["% not captured"] >= 50]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Clustered sentences", f"{n_total:,}")
+    c2.metric("Not captured", f"{n_unc:,} ({100 * n_unc / n_total:.1f}%)")
+    c3.metric("Topics >50% uncaptured", f"{len(mostly)} / {len(unc)}")
+
+    top = unc.head(15).iloc[::-1]
+    fig_u, ax_u = plt.subplots(figsize=(10, max(3, len(top) * 0.42)))
+    fig_u.patch.set_facecolor("white")
+    ax_u.set_facecolor("#f8f9fa")
+    _cmap_u = plt.get_cmap("viridis")
+    bars_u = ax_u.barh(
+        top["MOSAIC topic"], top["% not captured"],
+        color=[_cmap_u(x) for x in _zs_rank_ramp(len(top))],
+        edgecolor="white", linewidth=0.8, height=0.68,
+    )
+    for bar, v in zip(bars_u, top["% not captured"]):
+        ax_u.text(v + 1.2, bar.get_y() + bar.get_height() / 2, f"{v:.0f}%",
+                  va="center", ha="left", fontsize=9, color="#333333", fontweight="bold")
+    ax_u.axvline(50, color="#d62728", linestyle="--", linewidth=1.2)
+    ax_u.set_xlim(0, 105)
+    ax_u.set_xlabel("% of the topic's sentences left Unclassified",
+                    fontsize=10, color="#555555")
+    ax_u.set_title("Least-covered MOSAIC topics", fontsize=11, color="#333333", pad=10)
+    for spine in ("top", "right"):
+        ax_u.spines[spine].set_visible(False)
+    ax_u.tick_params(axis="y", labelsize=9, colors="#333333")
+    ax_u.tick_params(axis="x", labelsize=8, colors="#777777")
+    ax_u.grid(axis="x", color="#e0e0e0", linewidth=0.8)
+    ax_u.set_axisbelow(True)
+    plt.tight_layout(pad=1.2)
+    st.pyplot(fig_u)
+
+    buf_u = BytesIO()
+    fig_u.savefig(buf_u, format="png", dpi=200, bbox_inches="tight")
+    st.download_button(
+        "Download coverage chart (PNG)", data=buf_u.getvalue(),
+        file_name="zeroshot_uncaptured_topics.png", mime="image/png",
+        key=f"{key_prefix}_unc_png",
+    )
+    plt.close(fig_u)
+
+    st.dataframe(
+        unc.style.background_gradient(
+            subset=["% not captured"], cmap="viridis",
+            gmap=unc["% not captured"].rank(method="first"),  # rank, not value
+        ),
+        use_container_width=True, hide_index=True,
+    )
+    st.download_button(
+        "Download coverage table (CSV)",
+        data=unc.to_csv(index=False).encode("utf-8-sig"),
+        file_name="zeroshot_uncaptured_topics.csv", mime="text/csv",
+        key=f"{key_prefix}_unc_csv",
+    )
 
 
 # =====================================================================
@@ -852,6 +1164,10 @@ def _parse_condition_csv(df: pd.DataFrame) -> dict[str, list[str]]:
     if "topic_name" in df.columns and "texts" in df.columns:
         out: dict[str, list[str]] = {}
         for _, row in df.iterrows():
+            # Topic -1 is BERTopic's outlier bin: a grab-bag of unrelated sentences,
+            # not a theme. Its mean vector is meaningless, so never match on it.
+            if "Topic" in df.columns and pd.to_numeric(row["Topic"], errors="coerce") == -1:
+                continue
             name = str(row["topic_name"]).strip()
             if name in ("Unlabelled", "Outlier", "Too Specific (Idiosyncratic)", ""):
                 continue
@@ -877,9 +1193,36 @@ def _parse_condition_csv(df: pd.DataFrame) -> dict[str, list[str]]:
 
 @st.cache_data
 def _embed_sentences(sentences: tuple[str, ...], model_name: str) -> np.ndarray:
-    """Embed a deduplicated tuple of sentences (cache-friendly)."""
+    """Embed a deduplicated tuple of sentences (cache-friendly).
+
+    Encoded in chunks so the UI can show real progress and a time estimate: with a
+    multi-billion-parameter model this step runs for minutes, and a bare spinner
+    gives no way to tell slow-but-working apart from hung.
+    """
     model = load_embedding_model(model_name)
-    return model.encode(list(sentences), show_progress_bar=False, convert_to_numpy=True)
+    todo = list(sentences)
+    if not todo:
+        return np.empty((0, 0))
+
+    chunk = 256
+    if len(todo) <= chunk:
+        return model.encode(todo, show_progress_bar=False, convert_to_numpy=True)
+
+    bar = st.progress(0.0, text=f"Embedding {len(todo):,} sentences…")
+    out, start = [], time.time()
+    try:
+        for i in range(0, len(todo), chunk):
+            out.append(model.encode(todo[i:i + chunk], batch_size=32,
+                                    show_progress_bar=False, convert_to_numpy=True))
+            done = min(i + chunk, len(todo))
+            elapsed = time.time() - start
+            eta = elapsed / done * (len(todo) - done)
+            bar.progress(done / len(todo),
+                         text=f"Embedding {done:,}/{len(todo):,} sentences — "
+                              f"about {eta / 60:.1f} min left")
+    finally:
+        bar.empty()
+    return np.vstack(out)
 
 
 @st.cache_data
@@ -891,41 +1234,218 @@ def compute_condition_similarity(
     """
     Given two dicts of {topic_name: [sentences]}, embed all sentences,
     build mean topic vectors, and return (similarity_matrix_df, vec_a, vec_b).
+
+    Scores are *centered* cosines. Raw sentence-transformer embeddings are
+    anisotropic — they occupy a narrow cone, so every pair of topics scores
+    ~0.6–0.98 and unrelated themes look "strongly correlated" (measured on real
+    data: min raw cosine across a 36x43 topic matrix was 0.55). Centering removes
+    that shared component and restores a discriminative range.
+
+    Centering is done **per condition** (each condition's sentences are centered
+    on that condition's own centroid) rather than on the pooled centroid, for two
+    reasons:
+
+    1. Reproducibility. The pooled centroid is a size-weighted blend of the two
+       conditions, so the *same* pair of topics scores differently depending on
+       how many sentences the other condition happens to contain.
+    2. Interpretability. Each topic vector becomes that topic's deviation from
+       its own condition's average, and the size-weighted mean of those deviations
+       is exactly zero in both conditions. That makes 0 a genuine "unrelated"
+       baseline (measured background median on real data: -0.01), so the score
+       reads like a correlation of topic profiles.
     """
-    # Collect all unique sentences across both conditions for a single encode pass
-    all_sents_a = [s for sents in topics_a.values() for s in sents]
-    all_sents_b = [s for sents in topics_b.values() for s in sents]
+    names_a = list(topics_a.keys())
+    names_b = list(topics_b.keys())
 
-    unique_sents = list(dict.fromkeys(all_sents_a + all_sents_b))
+    # Single encode pass over the union of both conditions' sentences.
+    occ_a = [s for name in names_a for s in topics_a[name]]
+    occ_b = [s for name in names_b for s in topics_b[name]]
+    unique_sents = list(dict.fromkeys(occ_a + occ_b))
+    if not unique_sents:
+        return pd.DataFrame(), np.empty((0, 0)), np.empty((0, 0))
+
     embeddings = np.asarray(_embed_sentences(tuple(unique_sents), model_name), dtype=np.float64)
+    pos = {s: i for i, s in enumerate(unique_sents)}
 
-    # ── Mean-centering (remove the common component) ──────────────────────────
-    # Sentence-transformer embeddings are anisotropic: they occupy a narrow cone,
-    # so *every* pair of topics scores a high cosine (~0.6–0.99) and even unrelated
-    # themes look "strongly correlated". Subtracting the global centroid removes
-    # that shared direction and restores a discriminative range (≈ -0.4 … 0.9),
-    # where unrelated topics fall near 0 (or negative) and real matches stand out.
-    if len(embeddings) > 1:
-        embeddings = embeddings - embeddings.mean(axis=0, keepdims=True)
+    def _centroid(occurrences):
+        """Centroid over sentence *occurrences* (duplicates counted), so that it
+        matches the weighting used by the topic means below."""
+        idx = [pos[s] for s in occurrences if s in pos]
+        return embeddings[idx].mean(axis=0) if idx else np.zeros(embeddings.shape[1])
 
-    sent_to_vec = {s: embeddings[i] for i, s in enumerate(unique_sents)}
+    centroid_a = _centroid(occ_a)
+    centroid_b = _centroid(occ_b)
 
-    def _mean_vec(sents):
-        vecs = [sent_to_vec[s] for s in sents if s in sent_to_vec]
-        return np.mean(vecs, axis=0) if vecs else None
+    def _topic_vecs(topics, names, centroid):
+        """Return centered *and* uncentered topic means (same topic order)."""
+        vecs, raw, valid = [], [], []
+        for name in names:
+            idx = [pos[s] for s in topics[name] if s in pos]
+            if not idx:
+                continue
+            mean_vec = embeddings[idx].mean(axis=0)
+            raw.append(mean_vec)
+            vecs.append(mean_vec - centroid)
+            valid.append(name)
+        return np.array(vecs), np.array(raw), valid
 
-    topic_names_a = list(topics_a.keys())
-    topic_names_b = list(topics_b.keys())
+    vecs_a, raw_a, valid_a = _topic_vecs(topics_a, names_a, centroid_a)
+    vecs_b, raw_b, valid_b = _topic_vecs(topics_b, names_b, centroid_b)
+    if len(valid_a) == 0 or len(valid_b) == 0:
+        return pd.DataFrame(), pd.DataFrame(), vecs_a, vecs_b
 
-    vecs_a = np.array([v for name in topic_names_a if (v := _mean_vec(topics_a[name])) is not None])
-    vecs_b = np.array([v for name in topic_names_b if (v := _mean_vec(topics_b[name])) is not None])
+    sim_df = pd.DataFrame(cosine_similarity(vecs_a, vecs_b), index=valid_a, columns=valid_b)
+    # Uncentered cosine, reported alongside for interpretation only. It answers
+    # "how much content do these two topics share in absolute terms", but it is
+    # useless as a matching rule: sentence-transformer embeddings are anisotropic,
+    # so on real data every pair scores ~0.55-0.98 and the ranking is dominated by
+    # how generic a topic is. Matching decisions use the centered score.
+    raw_df = pd.DataFrame(cosine_similarity(raw_a, raw_b), index=valid_a, columns=valid_b)
+    return sim_df, raw_df, vecs_a, vecs_b
 
-    valid_a = [n for n in topic_names_a if _mean_vec(topics_a[n]) is not None]
-    valid_b = [n for n in topic_names_b if _mean_vec(topics_b[n]) is not None]
 
-    sim = cosine_similarity(vecs_a, vecs_b)
-    sim_df = pd.DataFrame(sim, index=valid_a, columns=valid_b)
-    return sim_df, vecs_a, vecs_b
+# ── Threshold calibration ────────────────────────────────────────────────────
+# A fixed cut-off like "0.50" is not portable: its meaning shifts with the
+# embedding model, the corpus and the granularity. Instead, calibrate against the
+# comparison's own background.
+#
+# Rationale for the null: at most min(n_a, n_b) of the n_a x n_b cells can be
+# genuine correspondences, so >=95% of the matrix is by construction
+# non-corresponding pairs. Robust location/scale (median / MAD) of the whole
+# matrix therefore estimate the "no correspondence" distribution almost
+# unaffected by the handful of real matches sitting in the tail.
+#
+# Rejected alternative: a permutation null that reshuffles sentences between
+# topics within each condition. Measured on real data it sits at mean 0.00 with
+# sd 0.12, so it flags ~15% of all pairs at p<0.05 and admits obvious
+# non-matches (e.g. "Sudden perception of deeper reality" vs "Uncontrollable
+# laughter", sim 0.27, p=0.012). It tests "more alike than two random sentence
+# bags", which is far weaker than "about the same theme" — much too lenient.
+
+_MAD_TO_SD = 1.4826
+
+# Stringency presets: k = how many robust SDs above the background median.
+# Validated against hand-labelled matches on a 36x43 real comparison, where the
+# best achievable F1 sat at a cut-off of ~0.62; k=3.5 reproduces that value
+# (0.627) without hard-coding it.
+STRINGENCY_LEVELS = {
+    "Lenient (k = 3.0)": 3.0,
+    "Balanced (k = 3.5) — recommended": 3.5,
+    "Strict (k = 4.0)": 4.0,
+}
+
+
+def _robust_loc_scale(values: np.ndarray) -> tuple[float, float]:
+    """Median and MAD-based SD estimate, with fallbacks for degenerate input."""
+    v = np.asarray(values, dtype=np.float64).ravel()
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return 0.0, 1.0
+    med = float(np.median(v))
+    sd = _MAD_TO_SD * float(np.median(np.abs(v - med)))
+    if not np.isfinite(sd) or sd <= 1e-9:          # e.g. a 1xN matrix
+        sd = float(np.std(v))
+    if not np.isfinite(sd) or sd <= 1e-9:
+        sd = 1.0
+    return med, sd
+
+
+def calibrate_match_threshold(sim_df: pd.DataFrame, k: float) -> dict:
+    """Derive a match threshold from the background distribution of `sim_df`.
+
+    Returns the threshold plus the diagnostics needed to judge whether it is too
+    lenient or too strict.
+    """
+    n_a, n_b = (sim_df.shape if sim_df.size else (0, 0))
+    med, sd = _robust_loc_scale(sim_df.values if sim_df.size else np.array([]))
+    threshold = med + k * sd
+    tail = float(norm.sf(k))                       # per-pair false-positive rate
+
+    # Expected chance matches under one-to-one (best-hit) matching: each of the
+    # n_a topics gets one shot at n_b candidates, so P(its best hit clears the
+    # bar by chance) = 1 - (1 - tail)^n_b.
+    expected_chance = (n_a * (1.0 - (1.0 - tail) ** n_b)) if n_a and n_b else 0.0
+    expected_chance = min(expected_chance, float(min(n_a, n_b) if n_a and n_b else 0))
+
+    vals = sim_df.values[np.isfinite(sim_df.values)] if sim_df.size else np.array([])
+    background_pct = float((vals < threshold).mean() * 100) if vals.size else 0.0
+    return {
+        "threshold": float(threshold),
+        "k": float(k),
+        "median": med,
+        "robust_sd": sd,
+        "tail": tail,
+        "expected_chance": float(expected_chance),
+        "background_pct": background_pct,
+        "n_pairs": int(n_a * n_b),
+        "max_possible": int(min(n_a, n_b)) if n_a and n_b else 0,
+    }
+
+
+def pair_zscores(sim_df: pd.DataFrame) -> pd.DataFrame:
+    """Per-pair `z_min`: how far a score stands out within its own row *and* its
+    own column, in robust SDs.
+
+    A global threshold cannot catch a "hub" topic — a broad, generic theme that
+    scores highly against everything in the other condition. Such a topic is not
+    a specific correspondence. Requiring a pair to be an outlier in both its row
+    and its column filters those out.
+    """
+    if sim_df.empty:
+        return pd.DataFrame()
+    S = sim_df.values
+    z_row = np.empty_like(S)
+    z_col = np.empty_like(S)
+    for i in range(S.shape[0]):
+        m, s = _robust_loc_scale(S[i, :])
+        z_row[i, :] = (S[i, :] - m) / s
+    for j in range(S.shape[1]):
+        m, s = _robust_loc_scale(S[:, j])
+        z_col[:, j] = (S[:, j] - m) / s
+    return pd.DataFrame(np.minimum(z_row, z_col), index=sim_df.index, columns=sim_df.columns)
+
+
+def greedy_match(sim_df: pd.DataFrame, threshold: float,
+                 z_df: pd.DataFrame | None = None, min_z: float | None = None):
+    """One-to-one greedy matching: repeatedly take the highest remaining score.
+
+    Returns (matches, unmatched_a, unmatched_b) where each match is a dict with
+    the score, `z_min`, and whether the pair is a reciprocal best hit.
+    """
+    unmatched_a = list(sim_df.index)
+    unmatched_b = list(sim_df.columns)
+    matches: list[dict] = []
+    if sim_df.empty:
+        return matches, unmatched_a, unmatched_b
+
+    S = sim_df.values.astype(np.float64).copy()
+    S[~np.isfinite(S)] = -np.inf
+    # Reciprocal best hit is a property of the original matrix, so record it first.
+    best_for_row = S.argmax(axis=1)
+    best_for_col = S.argmax(axis=0)
+    rows, cols = list(sim_df.index), list(sim_df.columns)
+    work = S.copy()
+
+    for _ in range(min(S.shape)):
+        flat = int(np.argmax(work))
+        i, j = divmod(flat, work.shape[1])
+        score = float(work[i, j])
+        if not np.isfinite(score) or score < threshold:
+            break
+        z_min = float(z_df.iat[i, j]) if z_df is not None and not z_df.empty else float("nan")
+        if min_z is None or not np.isfinite(z_min) or z_min >= min_z:
+            matches.append({
+                "a": rows[i], "b": cols[j], "score": score, "z_min": z_min,
+                "reciprocal_best": bool(best_for_row[i] == j and best_for_col[j] == i),
+            })
+            unmatched_a.remove(rows[i])
+            unmatched_b.remove(cols[j])
+            work[i, :] = -np.inf
+            work[:, j] = -np.inf
+        else:
+            # Rejected on z_min only: retire this cell, leave both topics available.
+            work[i, j] = -np.inf
+    return matches, unmatched_a, unmatched_b
 
 
 def generate_and_save_embeddings(
@@ -1643,9 +2163,16 @@ def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
         "Categories — one per line (edit freely)",
         height=height,
         key=ta_key,
-        help="These are the predefined topics you want to classify documents into. "
-             "Each line is one dimension/category. Edit or replace them, then "
-             "optionally save the set below.",
+        help="These are the predefined topics you want to classify documents into.\n\n"
+             "Each line is one category. **Accuracy improves a lot if you add a short "
+             "description after a `|`**, e.g.:\n\n"
+             "`Anxiety | fear, panic, dread, feeling threatened`\n\n"
+             "A bare two-word label is an abstract phrase, and its embedding sits far "
+             "from real first-person sentences; describing the category in sentence-like "
+             "language anchors it much better.\n\n"
+             "You can also repeat the same label on several lines with different "
+             "descriptions (e.g. one questionnaire item per line) — a document matches "
+             "the category via its best-matching line.",
     )
 
     with st.expander("Save / manage category sets"):
@@ -1688,6 +2215,123 @@ def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
     return raw
 
 
+def _cond_threshold_ui(sim_df: pd.DataFrame, key_suffix: str = ""):
+    """Threshold controls for the condition comparison.
+
+    Returns (threshold, z_df, min_z, calibration_dict).
+    """
+    st.subheader("Match threshold")
+    z_df = pair_zscores(sim_df)
+
+    mode = st.radio(
+        "How should the threshold be chosen?",
+        ["Calibrated to this comparison (recommended)", "Manual"],
+        key=f"cond_thresh_mode{key_suffix}", horizontal=True,
+        help="**Calibrated** derives the cut-off from this comparison's own "
+             "background: at most min(n_A, n_B) of the topic pairs can be genuine "
+             "matches, so the bulk of the matrix estimates what 'no correspondence' "
+             "looks like for *your* embedding model and corpus. The threshold is "
+             "placed k robust SDs above that background median.\n\n"
+             "A hard-coded number like 0.50 does not transfer between embedding "
+             "models, corpora or sentence/report granularity — the same value can be "
+             "strict in one comparison and meaningless in another.",
+    )
+
+    tc1, tc2 = st.columns([1, 1])
+    if mode.startswith("Calibrated"):
+        with tc1:
+            level = st.select_slider(
+                "Stringency", options=list(STRINGENCY_LEVELS),
+                value="Balanced (k = 3.5) — recommended",
+                key=f"cond_stringency{key_suffix}",
+                help="k = how many robust standard deviations above the background "
+                     "median a pair must score.\n\n"
+                     "**Lenient (3.0)** casts a wider net — use when you would rather "
+                     "review a few false matches than miss a real one.\n"
+                     "**Balanced (3.5)** is the default.\n"
+                     "**Strict (4.0)** keeps only unambiguous correspondences.",
+            )
+        calib = calibrate_match_threshold(sim_df, STRINGENCY_LEVELS[level])
+        threshold = calib["threshold"]
+        with tc2:
+            st.metric("Calibrated threshold", f"{threshold:.3f}",
+                      help="Derived from your data — not a fixed constant.")
+    else:
+        lo = float(np.floor(np.nanmin(sim_df.values) * 20) / 20)
+        hi = float(np.ceil(np.nanmax(sim_df.values) * 20) / 20)
+        default = calibrate_match_threshold(sim_df, 3.5)["threshold"]
+        with tc1:
+            threshold = st.slider(
+                "Match threshold (centered cosine)",
+                min_value=lo, max_value=hi,
+                value=float(np.clip(round(default, 2), lo, hi)), step=0.01,
+                key=f"cond_thresh{key_suffix}",
+                help="Topic pairs scoring above this value are treated as shared. "
+                     "The slider starts at the calibrated value; the chart below shows "
+                     "where your choice sits relative to the background.",
+            )
+        calib = calibrate_match_threshold(sim_df, 3.5)
+        # Express the manual choice on the same scale so it stays interpretable.
+        calib["k"] = (threshold - calib["median"]) / calib["robust_sd"]
+        calib["tail"] = float(norm.sf(calib["k"]))
+        n_a, n_b = sim_df.shape
+        calib["expected_chance"] = min(
+            n_a * (1.0 - (1.0 - calib["tail"]) ** n_b), float(min(n_a, n_b)))
+        calib["threshold"] = threshold
+        calib["background_pct"] = float((sim_df.values < threshold).mean() * 100)
+        with tc2:
+            st.metric("Equivalent stringency", f"k = {calib['k']:.2f}",
+                      help="Robust SDs above the background median. Below ~3.0 is "
+                           "lenient, above ~4.0 is strict.")
+
+    min_z = None
+    if st.checkbox(
+        "Also require the pair to stand out in its own row and column (recommended)",
+        value=True, key=f"cond_use_z{key_suffix}",
+        help="Guards against 'hub' topics — broad, generic themes that score highly "
+             "against everything in the other condition and so match by default. A "
+             "global threshold cannot detect these. Requiring the pair to be an "
+             "outlier in both its row and its column keeps only specific "
+             "correspondences.",
+    ):
+        min_z = st.slider(
+            "Minimum row/column z-score (z_min)", 0.0, 4.0, 2.0, 0.1,
+            key=f"cond_min_z{key_suffix}",
+            help="2.0 ≈ the pair must sit in roughly the top 2% of both its row and "
+                 "its column.",
+        )
+
+    # ── Where the threshold sits relative to the background ───────
+    vals = sim_df.values[np.isfinite(sim_df.values)]
+    fig, ax = plt.subplots(figsize=(7.5, 2.9))
+    fig.patch.set_facecolor("white")
+    ax.hist(vals, bins=60, color="#9db4e8", edgecolor="white", linewidth=0.4)
+    ax.axvline(calib["median"], color="#888888", linestyle=":", linewidth=1.4,
+               label=f"background median = {calib['median']:.2f}")
+    for k_ref, style in ((3.0, (0, (4, 3))), (4.0, (0, (1, 2)))):
+        ax.axvline(calib["median"] + k_ref * calib["robust_sd"], color="#c0c0c0",
+                   linestyle=style, linewidth=1.1)
+    ax.axvline(calib["threshold"], color="#d1495b", linewidth=2.2,
+               label=f"threshold = {calib['threshold']:.2f}  (k = {calib['k']:.1f})")
+    ax.set_xlabel("Centered cosine across all topic pairs", fontsize=9)
+    ax.set_ylabel("Pairs", fontsize=9)
+    ax.set_title("Threshold vs. the background distribution of this comparison",
+                 fontsize=10, pad=8)
+    ax.tick_params(labelsize=8)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    ax.legend(fontsize=7.5, frameon=False)
+    plt.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
+    st.caption(
+        f"Faint dashed lines mark k = 3.0 and k = 4.0. "
+        f"The threshold sits above {calib['background_pct']:.1f}% of all "
+        f"{calib['n_pairs']:,} topic pairs."
+    )
+    return threshold, z_df, min_z, calib
+
+
 def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None:
     """Render the full condition-comparison UI.
     key_suffix keeps widget/session-state keys unique when rendered in multiple places.
@@ -1712,35 +2356,24 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             help="The `topics_summary_*.csv` from the pipeline run on Condition B.",
         )
 
-    sim_col, thresh_col = st.columns([1, 1])
-    with sim_col:
-        cond_threshold = st.slider(
-            "Match threshold (correlation)",
-            min_value=0.0, max_value=0.90, value=0.50, step=0.01,
-            key=f"cond_thresh{key_suffix}",
-            help="Topic pairs scoring above this value are considered 'shared'.\n\n"
-                 "This is **not raw cosine similarity** — it's a *centered* cosine "
-                 "(the shared component every text has is removed first), so it "
-                 "behaves like a **correlation**: 0 = unrelated, +1 = identical "
-                 "theme, negative = contrasting.\n\n"
-                 "Raw cosine between any two sentences is almost always high "
-                 "(~0.6–0.9), even for unrelated topics, because all text sits in a "
-                 "narrow region of the embedding space. Centering removes that "
-                 "baseline, so the scale spreads out and shrinks toward 0. That's "
-                 "why a value that looks modest is actually strong here — just like "
-                 "a Pearson correlation of r≈0.5 is a strong effect.\n\n"
-                 "**Guide:** ≥0.50 strong/solid · 0.30–0.50 moderate · ~0 unrelated · "
-                 "negative = actively contrasting.",
-        )
-    with thresh_col:
-        st.info(
-            f"Embedding model: `{embedding_model}`  \n"
-            "Sentences in each topic are embedded, **mean-centered** (the shared "
-            "component all texts have is removed), averaged to one vector per topic, "
-            "then compared. The result behaves like a **correlation**: "
-            "**+1** = same theme, **0** = unrelated, **negative** = opposite/contrasting. "
-            "Values are smaller than raw cosine on purpose — 0.5–0.7 here is a strong match."
-        )
+    st.info(
+        f"Embedding model: `{embedding_model}`  \n"
+        "Topics are matched on **the sentences inside them, never on their labels** — "
+        "so two topics with quite different names can still be matched if their "
+        "content lines up.  \n\n"
+        "Each topic's sentences are embedded, then centered on their own condition's "
+        "average, so a topic vector is that theme's *deviation* from what its condition "
+        "talks about overall. Reading the resulting **match score**:  \n"
+        "• **~0.9** — the same topic (measured by splitting one dataset in half and "
+        "comparing it with itself)  \n"
+        "• **~0.6+** — a real correspondence  \n"
+        "• **0** — unrelated  \n"
+        "• **negative** — no match; the size of a negative number carries no meaning, "
+        "so don't read −0.5 as 'more opposite' than −0.1.  \n\n"
+        "Scores look much smaller than plain cosine similarity on purpose: plain cosine "
+        "rates *every* pair 0.5–1.0, so it cannot separate a real match from a "
+        "coincidence. The plain value is still shown as `raw_overlap` for reference."
+    )
 
     run_cond = st.button(
         "Run Comparison", type="primary",
@@ -1768,9 +2401,15 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             return
         total_sents = sum(len(v) for v in topics_a.values()) + sum(len(v) for v in topics_b.values())
         with st.spinner(f"Embedding {total_sents} sentences and computing similarity…"):
-            sim_df, _, _ = compute_condition_similarity(topics_a, topics_b, embedding_model)
+            sim_df, raw_df, _, _ = compute_condition_similarity(
+                topics_a, topics_b, embedding_model)
+        if sim_df.empty:
+            st.error("No comparable topics were found — every topic in at least one "
+                     "condition was empty or excluded. Check that the CSVs contain "
+                     "labelled topics with text.")
+            return
         st.session_state[_sim_key] = {
-            "sim_df": sim_df, "topics_a": topics_a, "topics_b": topics_b,
+            "sim_df": sim_df, "raw_df": raw_df, "topics_a": topics_a, "topics_b": topics_b,
             "name_a": cond_name_a, "name_b": cond_name_b,
         }
 
@@ -1779,11 +2418,27 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
 
     cs = st.session_state[_sim_key]
     sim_df: pd.DataFrame = cs["sim_df"]
+    raw_df: pd.DataFrame = cs.get("raw_df", pd.DataFrame())
     topics_a: dict = cs["topics_a"]
     topics_b: dict = cs["topics_b"]
     name_a: str = cs["name_a"]
     name_b: str = cs["name_b"]
-    threshold = cond_threshold
+    if sim_df.empty:
+        st.error("No comparable topics in the stored comparison. Re-run it.")
+        return
+
+    # Display names become DataFrame columns further down, where a collision with
+    # each other or with a built-in column would silently drop a condition's counts.
+    _reserved = {"theme", "type", "similarity"}
+    if name_a.strip().lower() == name_b.strip().lower():
+        name_a, name_b = f"{name_a} (A)", f"{name_b} (B)"
+    if name_a.strip().lower() in _reserved:
+        name_a = f"{name_a} (A)"
+    if name_b.strip().lower() in _reserved:
+        name_b = f"{name_b} (B)"
+
+    # ── Threshold selection ───────────────────────────────────────
+    threshold, z_df, min_z, calib = _cond_threshold_ui(sim_df, key_suffix)
 
     # ── Heatmap ──────────────────────────────────────────────────
     st.subheader("Cosine Similarity Heatmap")
@@ -1816,10 +2471,14 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             "Tick 'Show ALL topics' or raise the slider to see more."
         )
 
-    # Centered cosine: use a diverging scale anchored at 0 so unrelated topics
-    # (near 0 / negative) read as neutral and real matches stand out in green.
+    # Negative scores are not "anti-correlation" — below 0 the magnitude tracks how
+    # extreme each topic is within its own condition, not how unlike the two are
+    # (measured: rho = +0.07 between negative scores and raw similarity). A diverging
+    # red/green scale would invite reading strong negatives as meaningful opposition,
+    # so clip at 0 and use a sequential scale: everything at 0 is simply "no match".
+    heat_df = heat_df.clip(lower=0.0)
     _vmax = max(0.3, float(np.nanmax(heat_df.values))) if heat_df.size else 1.0
-    _vmin = min(-0.3, float(np.nanmin(heat_df.values))) if heat_df.size else -1.0
+    _vmin = 0.0
     _ncols = len(heat_df.columns)
     _nrows = len(heat_df)
     # Annotate values only when the grid is small enough to stay legible.
@@ -1827,13 +2486,14 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     fig_heat, ax_heat = plt.subplots(figsize=(max(7, _ncols * 1.4), max(5, _nrows * 1.0)))
     fig_heat.patch.set_facecolor("white")
     sns.heatmap(
-        heat_df, annot=_annot, fmt=".2f", cmap="RdYlGn",
-        center=0.0, vmin=_vmin, vmax=_vmax, linewidths=0.6, linecolor="#f0f0f0",
+        heat_df, annot=_annot, fmt=".2f", cmap="YlGn",
+        vmin=_vmin, vmax=_vmax, linewidths=0.6, linecolor="#f0f0f0",
         annot_kws={"size": 9, "weight": "bold"},
         cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
     )
-    ax_heat.collections[0].colorbar.set_label("Correlation (centered cosine): +1 same · 0 unrelated · −1 opposite",
-                                              fontsize=8, labelpad=8)
+    ax_heat.collections[0].colorbar.set_label(
+        f"Match score:  0 = unrelated  ·  {threshold:.2f} = match  ·  ~0.9 = same topic",
+        fontsize=8, labelpad=8)
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=8)
     ax_heat.set_title(f"Semantic similarity: {name_a}  vs  {name_b}",
                       fontsize=13, pad=14, color="#222222")
@@ -1843,6 +2503,11 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
     plt.yticks(rotation=0, fontsize=8.5)
     plt.tight_layout(pad=1.5)
     st.pyplot(fig_heat)
+    st.caption(
+        "Scores below 0 are shown as 0. A negative score means 'no match', and its "
+        "size carries no further meaning — it reflects how unusual each topic is "
+        "within its own condition, not how different the two topics are."
+    )
     buf_heat = BytesIO()
     fig_heat.savefig(buf_heat, format="png", dpi=300, bbox_inches="tight")
     st.download_button("Download heatmap as PNG", data=buf_heat.getvalue(),
@@ -1851,72 +2516,215 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
 
     # ── Greedy matching ───────────────────────────────────────────
     st.subheader(f"Matched topics (threshold ≥ {threshold:.2f})")
-    matrix_copy = sim_df.copy()
-    shared = []
-    unique_a = list(sim_df.index)
-    unique_b = list(sim_df.columns)
-    while True:
-        max_score = float(matrix_copy.max().max())
-        if max_score < threshold:
-            break
-        idx_a, idx_b = matrix_copy.stack().idxmax()
-        shared.append((idx_a, idx_b, max_score))
-        if idx_a in unique_a: unique_a.remove(idx_a)
-        if idx_b in unique_b: unique_b.remove(idx_b)
-        matrix_copy.loc[idx_a, :] = -1e9
-        matrix_copy.loc[:, idx_b] = -1e9
+    matches, unique_a, unique_b = greedy_match(sim_df, threshold, z_df, min_z)
+    shared = [(m["a"], m["b"], m["score"]) for m in matches]
 
-    if shared:
-        shared_df = pd.DataFrame(shared, columns=[name_a, name_b, "cosine_similarity"])
-        shared_df = shared_df.sort_values("cosine_similarity", ascending=False).reset_index(drop=True)
-        st.success(f"Found **{len(shared)} shared topic pairs** above threshold {threshold:.2f}")
+    if matches:
+        def _raw(a_name, b_name):
+            if raw_df.empty or a_name not in raw_df.index or b_name not in raw_df.columns:
+                return np.nan
+            return round(float(raw_df.loc[a_name, b_name]), 3)
+
+        shared_df = pd.DataFrame([
+            {name_a: m["a"], name_b: m["b"], "match_score": round(m["score"], 3),
+             "raw_overlap": _raw(m["a"], m["b"]),
+             "z_min": round(m["z_min"], 2) if np.isfinite(m["z_min"]) else np.nan,
+             "reciprocal_best": m["reciprocal_best"]}
+            for m in matches
+        ]).sort_values("match_score", ascending=False).reset_index(drop=True)
+        st.success(f"Found **{len(matches)} shared topic pairs** above threshold {threshold:.2f}")
         st.dataframe(shared_df, use_container_width=True)
+        _raw_floor = float(raw_df.values.min()) if not raw_df.empty else float("nan")
+        st.caption(
+            f"**`match_score`** — the centered score all matching decisions use. "
+            f"0 = unrelated, {threshold:.2f}+ = a match, ~0.9 = the same topic.  \n"
+            f"**`raw_overlap`** — plain similarity of the two topics, for interpretation "
+            f"only. It does *not* start at 0: with this embedding model the least similar "
+            f"pair in your data scores {_raw_floor:.2f}, so read ~{_raw_floor:.2f} as "
+            "'nothing in common' and 0.95+ as 'very high overlap'. It is not used for "
+            "matching, because it ranks generic topics above specific ones.  \n"
+            "**`z_min`** — how far the pair stands out within its own row *and* column, "
+            "in robust SDs; low values mean the match is not specific. "
+            "**`reciprocal_best`** — each topic is the other's single best match, the "
+            "strongest form of evidence for a correspondence."
+        )
+        st.download_button(
+            "Download matched pairs (CSV)",
+            data=shared_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"matched_topics_{name_a}_{name_b}.csv", mime="text/csv",
+            key=f"cond_dl_matches{key_suffix}",
+        )
     else:
-        st.warning(f"No topic pairs found above threshold {threshold:.2f}. Try lowering the threshold.")
+        st.warning(f"No topic pairs found above threshold {threshold:.2f}. "
+                   "Either the two conditions genuinely share no themes, or the "
+                   "threshold is too strict — try the Lenient stringency level.")
+
+    # ── Is this threshold defensible? ─────────────────────────────
+    exp_chance = calib["expected_chance"]
+    n_max = calib["max_possible"]
+    d1, d2, d3 = st.columns(3)
+    d1.metric("Matched pairs", f"{len(matches)}",
+              help=f"Out of at most {n_max} possible one-to-one matches.")
+    d2.metric("Expected by chance", f"{exp_chance:.1f}",
+              help="How many matches this threshold would admit if the two "
+                   "conditions shared no themes at all, under the calibrated "
+                   "background model.")
+    enrichment = (len(matches) / exp_chance) if exp_chance > 0.05 else float("inf")
+    d3.metric("Enrichment", "∞" if np.isinf(enrichment) else f"{enrichment:.1f}×",
+              help="Matches found ÷ matches expected by chance. Above ~5x the "
+                   "matched set is dominated by real correspondences.")
+
+    if not matches:
+        pass
+    elif enrichment < 2:
+        st.error(
+            f"**Too lenient.** At this threshold roughly {exp_chance:.1f} of the "
+            f"{len(matches)} matches would appear even if the conditions shared "
+            "nothing. Raise the stringency before interpreting these pairs."
+        )
+    elif enrichment < 5:
+        st.warning(
+            f"**Borderline.** About {exp_chance:.1f} of the {len(matches)} matches "
+            "could be chance. Treat the weakest pairs with caution — check `z_min` "
+            "and `reciprocal_best` below, and read the actual sentences."
+        )
+    elif n_max and len(matches) > 0.6 * n_max:
+        st.warning(
+            f"**Check for over-matching.** {len(matches)} of a possible {n_max} "
+            "topics were paired. Near-complete pairing usually means one topic "
+            "solution is much coarser than the other, or the two conditions are "
+            "near-identical."
+        )
+    else:
+        st.success(
+            f"**Well calibrated.** {len(matches)} matches vs. ~{exp_chance:.1f} "
+            f"expected by chance ({enrichment:.0f}× enrichment)."
+        )
+    st.caption(
+        "These are statistical guard rails, not semantic ones. Embeddings place "
+        "opposites in the same region — a genuinely high score between, say, "
+        "*overwhelming bright light* and *absolute darkness* is a real property of "
+        "the metric, not a bug. Always read the sentences behind a pair before "
+        "reporting it."
+    )
+
+    # Unmatched topics, each with its closest counterpart. A bare name hides how
+    # near the miss was — a topic that just failed the threshold reads very
+    # differently from one with no counterpart at all.
+    def _closest(names, axis):
+        rows = []
+        for t in names:
+            if sim_df.empty or (t not in (sim_df.index if axis == 0 else sim_df.columns)):
+                rows.append({"topic": t, "closest": "—", "match_score": np.nan,
+                             "raw_overlap": np.nan})
+                continue
+            series = sim_df.loc[t] if axis == 0 else sim_df[t]
+            partner = series.idxmax()
+            raw_val = np.nan
+            if not raw_df.empty:
+                raw_val = round(float(raw_df.loc[t, partner] if axis == 0
+                                      else raw_df.loc[partner, t]), 3)
+            rows.append({"topic": t, "closest": partner,
+                         "match_score": round(float(series.max()), 3),
+                         "raw_overlap": raw_val})
+        return (pd.DataFrame(rows, columns=["topic", "closest", "match_score", "raw_overlap"])
+                .sort_values("match_score", ascending=False).reset_index(drop=True))
 
     mc1, mc2 = st.columns(2)
     with mc1:
         st.markdown(f"**Unique to {name_a}** ({len(unique_a)} topics)")
-        for t in unique_a: st.markdown(f"- {t}")
+        if unique_a:
+            st.dataframe(_closest(unique_a, 0), use_container_width=True, hide_index=True)
     with mc2:
         st.markdown(f"**Unique to {name_b}** ({len(unique_b)} topics)")
-        for t in unique_b: st.markdown(f"- {t}")
+        if unique_b:
+            st.dataframe(_closest(unique_b, 1), use_container_width=True, hide_index=True)
+    st.caption(
+        f"`closest` is each unmatched topic's nearest counterpart in the other "
+        f"condition. A `match_score` just under {threshold:.2f} is a near miss worth "
+        "reading; a score near 0 means there is genuinely nothing comparable."
+    )
 
     # ── Frequency comparison ──────────────────────────────────────
     st.subheader("Frequency comparison")
     counts_a = {name: len(sents) for name, sents in topics_a.items()}
     counts_b = {name: len(sents) for name, sents in topics_b.items()}
+    # Internal column names first — display names come from user input and could
+    # otherwise collide with "theme"/"type"/"similarity" and silently drop a column.
     rows_ct = []
     for a_name, b_name, score in sorted(shared, key=lambda x: -x[2]):
-        rows_ct.append({"theme": f"{a_name} / {b_name}", name_a: counts_a.get(a_name, 0),
-                        name_b: counts_b.get(b_name, 0), "type": "paired", "cosine": round(score, 3)})
+        rows_ct.append({"theme": f"{a_name} / {b_name}", "_a": counts_a.get(a_name, 0),
+                        "_b": counts_b.get(b_name, 0), "type": "paired",
+                        "similarity": round(score, 3)})
     for t in unique_a:
-        rows_ct.append({"theme": t, name_a: counts_a.get(t, 0), name_b: 0,
-                        "type": f"{name_a}-specific", "cosine": float("nan")})
+        rows_ct.append({"theme": t, "_a": counts_a.get(t, 0), "_b": 0,
+                        "type": f"{name_a}-specific", "similarity": float("nan")})
     for t in unique_b:
-        rows_ct.append({"theme": t, name_a: 0, name_b: counts_b.get(t, 0),
-                        "type": f"{name_b}-specific", "cosine": float("nan")})
-    ct_df = pd.DataFrame(rows_ct)
-    ct_df["total"] = ct_df[name_a] + ct_df[name_b]
-    ct_df = ct_df.sort_values("total", ascending=False).drop(columns="total").reset_index(drop=True)
-    st.dataframe(ct_df, use_container_width=True)
+        rows_ct.append({"theme": t, "_a": 0, "_b": counts_b.get(t, 0),
+                        "type": f"{name_b}-specific", "similarity": float("nan")})
+    ct_df = pd.DataFrame(rows_ct, columns=["theme", "_a", "_b", "type", "similarity"])
+    ct_df = (ct_df.assign(_total=ct_df["_a"] + ct_df["_b"])
+                  .sort_values("_total", ascending=False)
+                  .drop(columns="_total").reset_index(drop=True))
 
-    # Chi-squared test
-    counts_for_chi2 = ct_df[[name_a, name_b]].dropna()
-    if counts_for_chi2.shape[0] >= 2:
+    # ── Chi-squared on the *paired* themes only ───────────────────
+    # Rows for condition-specific topics contain a structural zero (a theme absent
+    # from one condition by construction, not by sampling). Including them makes
+    # the test reject essentially always and inflates chi2 without meaning. The
+    # answerable question is whether the *shared* themes are used in different
+    # proportions, so the test is restricted to paired rows.
+    paired = ct_df[ct_df["type"] == "paired"]
+    table = paired[["_a", "_b"]].to_numpy(dtype=float)
+    table = table[table.sum(axis=1) > 0]
+    st.markdown(f"**χ² test on the {len(table)} shared themes**")
+    if len(table) < 2:
+        st.info("Need at least 2 shared themes to test whether their proportions "
+                "differ between conditions.")
+    elif table.sum(axis=0).min() == 0:
+        st.info("One condition has no sentences in the shared themes — test skipped.")
+    else:
         try:
-            chi2_stat, p_val, dof, _ = chi2_contingency(counts_for_chi2)
-            chi_col1, chi_col2, chi_col3 = st.columns(3)
-            chi_col1.metric("χ² statistic", f"{chi2_stat:.2f}")
-            chi_col2.metric("Degrees of freedom", dof)
-            chi_col3.metric("p-value", f"{p_val:.4f}")
+            chi2_stat, p_val, dof, expected = chi2_contingency(table)
+            n_obs = float(table.sum())
+            cramers_v = float(np.sqrt(chi2_stat / (n_obs * (min(table.shape) - 1))))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("χ² statistic", f"{chi2_stat:.2f}")
+            c2.metric("df", dof)
+            c3.metric("p-value", f"{p_val:.4g}")
+            c4.metric("Cramér's V", f"{cramers_v:.3f}",
+                      help="Effect size: ~0.1 small, ~0.3 medium, ~0.5 large. With "
+                           "thousands of sentences a tiny difference can be highly "
+                           "significant, so read V alongside p.")
             if p_val < 0.05:
-                st.success(f"p = {p_val:.4f} < 0.05 — statistically significant difference "
-                           f"in topic distribution between {name_a} and {name_b}.")
+                st.success(
+                    f"p = {p_val:.4g} < 0.05 — the shared themes are used in "
+                    f"significantly different proportions in {name_a} vs {name_b} "
+                    f"(Cramér's V = {cramers_v:.3f})."
+                )
             else:
-                st.info(f"p = {p_val:.4f} ≥ 0.05 — no statistically significant difference detected.")
+                st.info(f"p = {p_val:.4g} ≥ 0.05 — no significant difference in how "
+                        "the shared themes are distributed.")
+            small = float((expected < 5).mean())
+            if small > 0.2:
+                st.warning(
+                    f"{small*100:.0f}% of expected counts are below 5, above the "
+                    "20% the χ² approximation tolerates. Treat the p-value as "
+                    "indicative only."
+                )
+            n_only_a, n_only_b = len(unique_a), len(unique_b)
+            if n_only_a or n_only_b:
+                st.caption(
+                    f"Excluded from the test: {n_only_a} theme(s) unique to {name_a} "
+                    f"and {n_only_b} unique to {name_b}. These are structural zeros — "
+                    "a theme absent from one condition by construction — and would "
+                    "force significance regardless of the data. Report them as "
+                    "condition-specific findings instead."
+                )
         except ValueError as e:
             st.warning(f"Chi-squared test could not be computed: {e}")
+
+    ct_df = ct_df.rename(columns={"_a": name_a, "_b": name_b})
+    st.dataframe(ct_df, use_container_width=True)
 
     # Bar chart
     st.subheader("Comparative frequency chart")
@@ -2047,12 +2855,27 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 st.warning("Could not auto-detect the embedding model from the filename. Please select the correct model above.")
 
             sa_zs_categories_raw = _zs_categories_input("sa_zs", height=220)
-            sa_zs_min_sim = st.slider(
-                "Minimum similarity threshold",
-                min_value=0.1, max_value=0.9, value=0.5, step=0.05,
-                key="sa_zs_thresh",
-                help="Documents with max category similarity below this value are left as 'Unclassified'.",
-            )
+            sa_th1, sa_th2 = st.columns(2)
+            with sa_th1:
+                sa_zs_min_sim = st.slider(
+                    "Minimum similarity threshold",
+                    min_value=0.0, max_value=0.9, value=0.5, step=0.01,
+                    key="sa_zs_thresh",
+                    help="Documents whose best category similarity is below this value are left "
+                         "'Unclassified'. Raw cosine values depend on the embedding model and "
+                         "corpus — after running, use the similarity histogram below to place "
+                         "this threshold; it updates the results instantly (no re-run needed).",
+                )
+            with sa_th2:
+                sa_zs_margin = st.slider(
+                    "Ambiguity margin (best vs runner-up)",
+                    min_value=0.0, max_value=0.2, value=0.0, step=0.005,
+                    key="sa_zs_margin",
+                    help="Require the best category to beat the runner-up by at least this much. "
+                         "Documents sitting between two category vectors are near coin-flips; "
+                         "raising this leaves them 'Unclassified' instead of assigning them "
+                         "arbitrarily. 0 disables the filter; 0.02–0.05 is a reasonable range.",
+                )
 
             sa_run_zs = st.button(
                 "Run Zero-Shot Classification",
@@ -2071,29 +2894,55 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 except Exception as e:
                     st.error(f"Could not load files: {e}")
                     st.stop()
-                sa_categories = [c.strip() for c in sa_zs_categories_raw.strip().splitlines() if c.strip()]
-                if not sa_categories:
+                sa_labels, sa_line_labels, sa_line_texts = _zs_parse_categories(sa_zs_categories_raw)
+                if not sa_labels:
                     st.error("Please enter at least one category.")
                     st.stop()
-                with st.spinner("Running zero-shot classification…"):
-                    sa_zs_topics, sa_zs_topic_info, _ = run_zeroshot(
-                        sa_docs_list, sa_embeddings, tuple(sa_categories),
-                        sa_zs_min_sim, sa_embedding_model,
-                        dataset_key=f"standalone_{len(sa_docs_list)}",
+                if len(sa_docs_list) != len(sa_embeddings):
+                    st.error(
+                        f"File mismatch: {len(sa_docs_list)} documents but "
+                        f"{len(sa_embeddings)} embeddings. Upload the .npy and .json "
+                        "saved from the same pipeline run."
                     )
-                st.session_state["sa_zs_results"] = (sa_zs_topics, sa_zs_topic_info, sa_categories, sa_docs_list)
-                st.session_state["sa_zs_min_sim"] = sa_zs_min_sim
-
-            if "sa_zs_results" in st.session_state:
-                _sa_zs_state = st.session_state["sa_zs_results"]
-                if len(_sa_zs_state) == 4:
-                    sa_zs_topics, sa_zs_topic_info, sa_categories, sa_docs_list = _sa_zs_state
-                else:
-                    sa_zs_topics, sa_zs_topic_info, sa_categories = _sa_zs_state
-                    sa_docs_list = []
-                if not sa_docs_list or len(sa_docs_list) != len(sa_zs_topics):
-                    st.warning("Session data mismatch — please re-run the classification.")
                     st.stop()
+                with st.spinner("Computing document ↔ category similarities…"):
+                    try:
+                        sa_line_sims = compute_zeroshot_similarities(
+                            sa_embeddings,
+                            _zs_embeddings_fingerprint(sa_embeddings),
+                            tuple(sa_line_texts),
+                            sa_embedding_model,
+                        )
+                    except Exception as e:
+                        st.error(f"Zero-shot classification failed: {e}")
+                        st.stop()
+                st.session_state["sa_zs_results"] = {
+                    "line_sims": sa_line_sims,
+                    "labels": sa_labels,
+                    "line_labels": sa_line_labels,
+                    "docs": sa_docs_list,
+                }
+
+            if isinstance(st.session_state.get("sa_zs_results"), dict):
+                _sa_state = st.session_state["sa_zs_results"]
+                sa_docs_list = _sa_state["docs"]
+                sa_zs_topics, sa_zs_topic_info, sa_zs_per_doc = apply_zeroshot_threshold(
+                    _sa_state["line_sims"], _sa_state["labels"], _sa_state["line_labels"],
+                    sa_zs_min_sim, sa_zs_margin,
+                )
+                sa_categories = _sa_state["labels"]
+
+                st.pyplot(_zs_similarity_histogram(
+                    sa_zs_per_doc["confidence"].to_numpy(), sa_zs_min_sim,
+                    sa_zs_margin, sa_zs_per_doc["margin"].to_numpy(),
+                ))
+                _sa_conf = sa_zs_per_doc["confidence"]
+                st.caption(
+                    f"Best-similarity percentiles: 25% = {_sa_conf.quantile(0.25):.2f} · "
+                    f"median = {_sa_conf.quantile(0.5):.2f} · 75% = {_sa_conf.quantile(0.75):.2f}. "
+                    "Move the threshold slider to reclassify instantly — a value below the 25% "
+                    "mark classifies almost everything; above the 75% mark keeps only the tail."
+                )
 
                 sa_total_zs = len(sa_zs_topics)
                 sa_classified_zs = sum(1 for t in sa_zs_topics if t != -1)
@@ -2107,6 +2956,7 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 sa_zs_name_map = sa_zs_topic_info.set_index("Topic")["Name"].to_dict()
                 sa_zs_df = pd.DataFrame({"sentence": sa_docs_list, "topic_id": sa_zs_topics})
                 sa_zs_df["category"] = sa_zs_df["topic_id"].map(sa_zs_name_map).fillna("Unclassified")
+                sa_zs_df = pd.concat([sa_zs_df, sa_zs_per_doc.reset_index(drop=True)], axis=1)
 
                 sa_zs_plot_df = (
                     sa_zs_topic_info[sa_zs_topic_info["Topic"] != -1]
@@ -2116,10 +2966,12 @@ if not os.path.exists(EMBEDDINGS_FILE):
 
                 if not sa_zs_plot_df.empty:
                     st.subheader("Distribution across categories")
-                    import matplotlib.colors as _mcolors
-                    _norm = _mcolors.Normalize(vmin=sa_zs_plot_df["Count"].min(), vmax=sa_zs_plot_df["Count"].max())
-                    _cmap = plt.get_cmap("Purples")
-                    _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in sa_zs_plot_df["Count"]]
+                    # Colour by rank, not by value: counts are heavily skewed
+                    # (one huge category, many small), so value-scaling squashes
+                    # most bars into one narrow band of the ramp. Spreading the
+                    # bars evenly over viridis keeps every colour distinguishable.
+                    _cmap = plt.get_cmap("viridis")
+                    _bar_colors = [_cmap(x) for x in _zs_rank_ramp(len(sa_zs_plot_df))]
                     fig_sa_zs, ax_sa_zs = plt.subplots(figsize=(10, max(4, len(sa_zs_plot_df) * 0.62)))
                     fig_sa_zs.patch.set_facecolor("white")
                     ax_sa_zs.set_facecolor("#f8f9fa")
@@ -2147,13 +2999,26 @@ if not os.path.exists(EMBEDDINGS_FILE):
                     cat_name = row_sa_zs["Name"]
                     count_sa_zs = row_sa_zs["Count"]
                     with st.expander(f"{cat_name}  ({count_sa_zs} sentences)"):
-                        cat_sentences = sa_zs_df[sa_zs_df["category"] == cat_name]["sentence"].reset_index(drop=True)
-                        n_show = st.slider("Sentences to show", 5, min(100, len(cat_sentences)), 10, key=f"sa_zs_show_{cat_name}")
-                        st.dataframe(cat_sentences.head(n_show).to_frame("sentence"), use_container_width=True)
+                        cat_sentences = (
+                            sa_zs_df[sa_zs_df["category"] == cat_name]
+                            [["sentence", "confidence", "margin", "runner_up"]]
+                            .sort_values("confidence", ascending=False)
+                            .reset_index(drop=True)
+                        )
+                        if len(cat_sentences) > 5:
+                            n_show = st.slider("Sentences to show", 5, min(100, len(cat_sentences)), min(10, len(cat_sentences)), key=f"sa_zs_show_{cat_name}")
+                        else:
+                            n_show = len(cat_sentences)
+                        st.dataframe(cat_sentences.head(n_show), use_container_width=True)
 
                 with st.expander(f"Unclassified  ({sa_unclassified_zs} sentences)"):
-                    unclass = sa_zs_df[sa_zs_df["category"] == "Unclassified"]["sentence"].reset_index(drop=True)
-                    st.dataframe(unclass.head(50).to_frame("sentence"), use_container_width=True)
+                    unclass = (
+                        sa_zs_df[sa_zs_df["category"] == "Unclassified"]
+                        [["sentence", "best_category", "confidence", "margin"]]
+                        .sort_values("confidence", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(unclass.head(50), use_container_width=True)
 
                 st.download_button(
                     "Download full classification results (CSV)",
@@ -2216,18 +3081,65 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 if _matched_cache is None:
                     st.info("BERTopic cross-reference not available — no matching `topics.json` found. Run the full pipeline on this dataset first.")
                 else:
-                    _topics_path  = _matched_cache / "topics.json"
+                    # A cache can hold several topic assignments (e.g. before and
+                    # after outlier reduction) and several label sets (one per LLM).
+                    # Which pair is used changes every number below, so make the
+                    # choice explicit instead of silently taking whatever sorts last.
+                    _topic_files = [
+                        p for p in sorted(_matched_cache.glob("topics*.json"))
+                        if _json_len(p) == _n_docs
+                    ]
                     _llm_label_files = sorted(_matched_cache.glob("llm_labels_*.json"))
+                    if not _topic_files:
+                        _topic_files = [_matched_cache / "topics.json"]
+
+                    _dataset_key = _matched_cache.parent.parent.name
+                    _prefs = _load_xref_prefs().get(_dataset_key, {})
+
+                    _xc1, _xc2 = st.columns(2)
+                    with _xc1:
+                        _topics_path = st.selectbox(
+                            "Topic assignments", _topic_files,
+                            index=_xref_default_index(
+                                _topic_files, _prefs.get("topics"), _topics_coverage,
+                            ),
+                            format_func=lambda p: f"{p.name}  ({_topics_coverage(p):,} assigned)",
+                            key="sa_xref_topics",
+                            help="Which saved BERTopic run to cross-reference. Files "
+                                 "like `*_ro70.json` are post-outlier-reduction "
+                                 "assignments — they cover more sentences. Defaults "
+                                 "to the run covering most of the corpus.",
+                        )
+                    with _xc2:
+                        _labels_path = st.selectbox(
+                            "Topic labels", _llm_label_files or [None],
+                            index=_xref_default_index(
+                                _llm_label_files, _prefs.get("labels"),
+                                lambda p: p.stat().st_mtime,
+                            ),
+                            format_func=lambda p: p.name if p else "none found",
+                            key="sa_xref_labels",
+                            help="Which LLM label set to display. Different models "
+                                 "produce different names for the same topics. Your "
+                                 "choice is remembered for this dataset.",
+                        )
+
+                    if _topics_path is not None:
+                        _save_xref_pref(
+                            _dataset_key, _topics_path.name,
+                            _labels_path.name if _labels_path is not None else "",
+                        )
+
                     with open(_topics_path) as _f:
                         _bt_topics = json.load(_f)
                     _llm_labels_xref = {}
-                    if _llm_label_files:
-                        with open(_llm_label_files[-1]) as _f:
+                    if _labels_path is not None:
+                        with open(_labels_path) as _f:
                             _llm_labels_xref = {int(k): v for k, v in json.load(_f).items()}
                     else:
                         st.caption("No LLM labels found — showing topic numbers. Run the full pipeline with LLM labelling for better labels.")
                     if len(_bt_topics) == _n_docs:
-                        _sa_zs_threshold = st.session_state.get("sa_zs_min_sim", "?")
+                        _sa_zs_threshold = f"{sa_zs_min_sim:.2f}"
                         st.subheader("BERTopic × Zero-Shot cross-reference")
                         st.caption(f"Each row shows how a BERTopic topic distributes across your zero-shot categories (rows sum to 100%). Similarity threshold: {_sa_zs_threshold}. '% unclassified' = sentences below threshold not assigned to any category.")
                         _xref_df = pd.DataFrame({
@@ -2275,6 +3187,11 @@ if not os.path.exists(EMBEDDINGS_FILE):
                             st.download_button("Download heatmap (PNG)", data=_heat_img, file_name="zeroshot_heatmap.png", mime="image/png")
                         except Exception:
                             st.caption("Install `kaleido` to enable heatmap download: `pip install kaleido`")
+
+                        _zs_uncovered_topics_ui(
+                            _xref_df["bt_label"], _xref_df["category"],
+                            sa_zs_min_sim, key_prefix="sa",
+                        )
 
                         st.caption("Per zero-shot category: top BERTopic topics inside it")
                         for _, _row_xref in sa_zs_plot_df.sort_values("Count", ascending=False).iterrows():
@@ -3484,20 +4401,32 @@ else:
         with zs_col1:
             zs_min_sim = st.slider(
                 "Minimum similarity threshold",
-                min_value=0.1,
+                min_value=0.0,
                 max_value=0.9,
                 value=0.5,
-                step=0.05,
+                step=0.01,
                 help=(
-                    "Cosine similarity ranges from 0 (completely unrelated) to 1 (identical meaning).\n\n"
-                    "Each sentence is compared to every category label. "
-                    "If its highest similarity score is below this threshold, it is left as 'Unclassified'.\n\n"
-                    "**Typical values:**\n"
-                    "- 0.3–0.4 → very lenient, most sentences get assigned (risk of false positives)\n"
-                    "- 0.5 → balanced default\n"
-                    "- 0.6–0.7 → strict, only high-confidence matches classified\n\n"
-                    "If too many sentences are Unclassified, lower the threshold. "
-                    "If the categories feel noisy, raise it."
+                    "Sentences whose best category similarity is below this value are left "
+                    "'Unclassified'.\n\n"
+                    "**Raw cosine values are model- and corpus-dependent** — with some "
+                    "embedding models almost all sentences score 0.40–0.55 against every "
+                    "category, so a fixed 'good' value does not exist. After running, use "
+                    "the similarity histogram shown with the results to place this "
+                    "threshold; moving the slider reclassifies instantly (no re-run)."
+                ),
+            )
+            zs_min_margin = st.slider(
+                "Ambiguity margin (best vs runner-up)",
+                min_value=0.0,
+                max_value=0.2,
+                value=0.0,
+                step=0.005,
+                key="zs_margin",
+                help=(
+                    "Require the best category to beat the runner-up by at least this much. "
+                    "Sentences sitting between two category vectors are near coin-flips — "
+                    "raising this leaves them 'Unclassified' instead of assigning them "
+                    "arbitrarily. 0 disables the filter; 0.02–0.05 is a reasonable range."
                 ),
             )
 
@@ -3508,33 +4437,54 @@ else:
                 "Zero-shot works by embedding both your documents **and** your category labels "
                 "into the same vector space, then assigning each sentence to the nearest category. "
                 f"Your documents are already embedded — only the category labels will be re-encoded "
-                f"using `{selected_embedding_model}` when you click Run."
+                f"using `{selected_embedding_model}` when you click Run.\n\n"
+                "**Tip:** bare labels like 'Anxiety' are weak anchors — add a `|` description "
+                "to each line (see the ? on the categories box) for noticeably better matches."
             )
 
         if st.button("Run Zero-Shot Classification", type="primary", key="zs_run_btn"):
-            zs_categories = [c.strip() for c in zs_categories_raw.strip().splitlines() if c.strip()]
-            if not zs_categories:
+            zs_labels, zs_line_labels, zs_line_texts = _zs_parse_categories(zs_categories_raw)
+            if not zs_labels:
                 st.error("Please enter at least one category.")
             else:
-                with st.spinner(f"Classifying {len(docs):,} documents into {len(zs_categories)} categories…"):
+                with st.spinner(f"Comparing {len(docs):,} documents to {len(zs_labels)} categories…"):
                     try:
-                        zs_topics, zs_topic_info, _ = run_zeroshot(
-                            docs,
+                        zs_line_sims = compute_zeroshot_similarities(
                             embeddings,
-                            tuple(zs_categories),
-                            zs_min_sim,
+                            _zs_embeddings_fingerprint(embeddings),
+                            tuple(zs_line_texts),
                             selected_embedding_model,
-                            DOCS_FILE,
                         )
-                        st.session_state["zs_results"] = (zs_topics, zs_topic_info, zs_categories)
+                        st.session_state["zs_results"] = {
+                            "line_sims": zs_line_sims,
+                            "labels": zs_labels,
+                            "line_labels": zs_line_labels,
+                        }
                         st.session_state["zs_results_docs_file"] = DOCS_FILE
                     except Exception as e:
                         st.error(f"Zero-shot classification failed: {e}")
 
         if "zs_results" in st.session_state and st.session_state.get("zs_results_docs_file") != DOCS_FILE:
             st.warning("The dataset has changed. Re-run zero-shot classification for the current dataset.")
-        elif "zs_results" in st.session_state:
-            zs_topics, zs_topic_info, zs_categories = st.session_state["zs_results"]
+        elif isinstance(st.session_state.get("zs_results"), dict):
+            _zs_state = st.session_state["zs_results"]
+            zs_topics, zs_topic_info, zs_per_doc = apply_zeroshot_threshold(
+                _zs_state["line_sims"], _zs_state["labels"], _zs_state["line_labels"],
+                zs_min_sim, zs_min_margin,
+            )
+            zs_categories = _zs_state["labels"]
+
+            st.pyplot(_zs_similarity_histogram(
+                zs_per_doc["confidence"].to_numpy(), zs_min_sim,
+                zs_min_margin, zs_per_doc["margin"].to_numpy(),
+            ))
+            _zs_conf = zs_per_doc["confidence"]
+            st.caption(
+                f"Best-similarity percentiles: 25% = {_zs_conf.quantile(0.25):.2f} · "
+                f"median = {_zs_conf.quantile(0.5):.2f} · 75% = {_zs_conf.quantile(0.75):.2f}. "
+                "Move the threshold slider to reclassify instantly — a value below the 25% "
+                "mark classifies almost everything; above the 75% mark keeps only the tail."
+            )
 
             # Summary metrics
             total_zs = len(zs_topics)
@@ -3550,6 +4500,7 @@ else:
             zs_name_map = zs_topic_info.set_index("Topic")["Name"].to_dict()
             zs_df = pd.DataFrame({"sentence": docs, "topic_id": zs_topics})
             zs_df["category"] = zs_df["topic_id"].map(zs_name_map).fillna("Unclassified")
+            zs_df = pd.concat([zs_df, zs_per_doc.reset_index(drop=True)], axis=1)
 
             # Bar chart (classified topics only, sorted by count)
             zs_plot_df = (
@@ -3560,14 +4511,9 @@ else:
 
             if not zs_plot_df.empty:
                 st.subheader("Distribution across categories")
-                import matplotlib.colors as _mcolors
-
-                _norm = _mcolors.Normalize(
-                    vmin=zs_plot_df["Count"].min(),
-                    vmax=zs_plot_df["Count"].max(),
-                )
-                _cmap = plt.get_cmap("Blues")
-                _bar_colors = [_cmap(0.35 + 0.55 * _norm(v)) for v in zs_plot_df["Count"]]
+                # Colour by rank, not by value — see _zs_rank_ramp.
+                _cmap = plt.get_cmap("viridis")
+                _bar_colors = [_cmap(x) for x in _zs_rank_ramp(len(zs_plot_df))]
 
                 fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.62)))
                 fig_zs.patch.set_facecolor("white")
@@ -3616,26 +4562,53 @@ else:
                 )
                 plt.close(fig_zs)
 
+            # ── MOSAIC topics the categories fail to capture ──────────────
+            _latest_zs = st.session_state.get("latest_results")
+            if (isinstance(_latest_zs, tuple) and len(_latest_zs) == 3
+                    and len(_latest_zs[2]) == len(zs_df)):
+                _zs_uncovered_topics_ui(
+                    _latest_zs[2], zs_df["category"], zs_min_sim, key_prefix="zs",
+                )
+            else:
+                st.caption(
+                    "Run the pipeline in **Main Results** to also see which MOSAIC "
+                    "topics these categories fail to capture."
+                )
+
             # Per-category expandable view
             st.subheader("Sentences per category")
             for _, row_zs in zs_plot_df.sort_values("Count", ascending=False).iterrows():
                 cat_name = row_zs["Name"]
                 count_zs = row_zs["Count"]
                 with st.expander(f"{cat_name}  ({count_zs} sentences)"):
-                    cat_sentences = zs_df[zs_df["category"] == cat_name]["sentence"].reset_index(drop=True)
-                    n_show = st.slider(
-                        "Sentences to show", 5, min(100, len(cat_sentences)), 10,
-                        key=f"zs_show_{cat_name}"
+                    cat_sentences = (
+                        zs_df[zs_df["category"] == cat_name]
+                        [["sentence", "confidence", "margin", "runner_up"]]
+                        .sort_values("confidence", ascending=False)
+                        .reset_index(drop=True)
                     )
+                    if len(cat_sentences) > 5:
+                        n_show = st.slider(
+                            "Sentences to show", 5, min(100, len(cat_sentences)),
+                            min(10, len(cat_sentences)),
+                            key=f"zs_show_{cat_name}"
+                        )
+                    else:
+                        n_show = len(cat_sentences)
                     st.dataframe(
-                        cat_sentences.head(n_show).to_frame("sentence"),
+                        cat_sentences.head(n_show),
                         use_container_width=True,
                     )
 
-            # Unclassified preview
+            # Unclassified preview — sorted by confidence so near-misses surface first
             with st.expander(f"Unclassified  ({unclassified_zs} sentences)"):
-                unclass_sentences = zs_df[zs_df["category"] == "Unclassified"]["sentence"].reset_index(drop=True)
-                st.dataframe(unclass_sentences.head(50).to_frame("sentence"), use_container_width=True)
+                unclass_sentences = (
+                    zs_df[zs_df["category"] == "Unclassified"]
+                    [["sentence", "best_category", "confidence", "margin"]]
+                    .sort_values("confidence", ascending=False)
+                    .reset_index(drop=True)
+                )
+                st.dataframe(unclass_sentences.head(50), use_container_width=True)
 
             # Download full results
             zs_base = (st.session_state.get("export_label_val", "").strip()
@@ -3668,9 +4641,10 @@ similarity between their topic vectors.
 
 **What the comparison does:**
 - All sentences in each topic are embedded using `{selected_embedding_model}` (same model as the sidebar)
-- Each topic is represented by the **mean vector** of its sentences
-- **Cosine similarity** is computed between every pair of topics across conditions
-- A greedy algorithm finds the best-matching pairs above the threshold
+- Each topic is represented by the **mean vector** of its sentences, **centered on its own condition's average** — so a topic vector is that theme's deviation from what the condition talks about overall
+- A **centered cosine** is computed between every pair of topics across conditions: +1 = same theme, 0 = unrelated, negative = contrasting
+- The **match threshold is calibrated from your own data** (see the *Match threshold* section) rather than fixed, because a raw number like 0.50 does not transfer between embedding models or corpora
+- A greedy algorithm finds the best one-to-one pairs above the threshold, and reports how many would be expected by chance
 - Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test, and a frequency bar chart
                 """
             )

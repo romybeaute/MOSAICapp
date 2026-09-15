@@ -39,3 +39,8 @@ eval/
 
 # Local tutorial datasets (participant data, never commit)
 data-tutorial/
+
+# Packaging build artefacts
+*.egg-info/
+build/
+dist/

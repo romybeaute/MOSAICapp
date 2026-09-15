@@ -1,5 +1,5 @@
 """
-File: app2.py
+File: app.py
 Description: Streamlit interface for the MOSAIC pipeline (BERTopic, UMAP, HDBSCAN, LLM labelling).
 Last Modified: 26/08/2026
 @corresp author: r.beaut@sussex.ac.uk

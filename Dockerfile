@@ -44,7 +44,7 @@ RUN curl -L "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/
     rm /tmp/stopwords.zip
 
 # ---- Copy app code ----
-# If you only want app.py + data, you can narrow this, but copying all is fine.
+# app.py imports mosaic_core from this folder, so copy the whole repo.
 COPY . .
 
 # ---- Hugging Face port wiring ----
@@ -55,7 +55,7 @@ EXPOSE 7860
 HEALTHCHECK CMD curl --fail http://localhost:${PORT}/_stcore/health || exit 1
 
 # ---- Run Streamlit ----
-ENTRYPOINT ["bash", "-c", "streamlit run app2.py \
+ENTRYPOINT ["bash", "-c", "streamlit run app.py \
     --server.port=${PORT} \
     --server.address=0.0.0.0 \
     --server.enableCORS=false \

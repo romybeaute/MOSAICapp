@@ -16,7 +16,7 @@ matplotlib
 huggingface_hub>=0.31.0
 pytest
 gensim>=4.0.0
-# --- app2.py interface deps ---
+# --- app.py interface deps ---
 plotly
 seaborn
 scipy

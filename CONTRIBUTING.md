@@ -46,15 +46,18 @@ If you have questions about using MOSAICapp:
 Before submitting a pull request, please run the tests:
 
 ```bash
-# Install test dependencies
-pip install pytest
+# Install the package with test dependencies
+pip install -e ".[dev]"
 
-# Run unit tests (fast, no internet required)
-pytest tests/test_core_functions.py -v
+# Run the fast, offline tests
+CI=true pytest tests/ -v
 
 # Run integration tests (slow, requires internet)
 pytest tests/test_integration.py -v
 ```
+
+New analysis methods belong in `mosaic_core` (no Streamlit imports) with tests in
+`tests/`; `app.py` should only call them and display the results.
 
 #### Code Style
 

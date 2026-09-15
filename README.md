@@ -30,8 +30,11 @@ The tool is designed for consciousness researchers, phenomenologists, and qualit
 - **No-code interface** — upload CSV, configure parameters, download results
 - **Sentence-level analysis** — optional segmentation for finer-grained themes
 - **Interactive visualisations** — 2D topic maps, hierarchical clustering, topic distributions
-- **LLM topic labelling** — automatic generation of interpretable labels (full version)
-- **Python API** — `mosaic_core` library for programmatic use and batch processing
+- **Topic quality and participation** — C_v and embedding coherence, per-topic diversity ratio
+- **LLM topic labelling** — automatic generation of interpretable labels
+- **Advanced analyses** (sidebar toggle) — zero-shot classification against questionnaire
+  items or your own categories, and comparison of topics found in two conditions
+- **Python API** — every method is available in the `mosaic_core` library, without Streamlit
 
 
 
@@ -91,12 +94,9 @@ python -c "import nltk; nltk.download('punkt')"
 ```
 streamlit run app.py
 ```
-to use the basic version (if only needs topic-modelling)
-or use 
-```
-streamlit run app2.py
-```
-to use the new, extended version, with zero-shot and comparison between datasets (may be a bit slower)
+The interface opens on the core topic-modelling workflow. Switch on **Advanced analyses**
+at the top of the sidebar to add the **Zero-Shot Classification** and **Condition
+Comparison** tabs (or open the app with `?advanced=1` in the URL).
 
 
 ### Input format
@@ -142,10 +142,10 @@ so it is **never committed**.
 *Option B — environment variable (good for a one-off session):*
 ```bash
 export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxx"   # add to ~/.zshrc or ~/.bashrc to persist
-streamlit run app2.py
+streamlit run app.py
 ```
 
-**Step 3 — Restart the app** (`streamlit run app2.py`). Topic labelling now works.
+**Step 3 — Restart the app** (`streamlit run app.py`). Topic labelling now works.
 
 > ⚠️ **Never paste your token into code, notebooks, or any committed file.**
 > If a token is ever exposed, revoke it on the
@@ -210,9 +210,23 @@ squeue -u $USER          # monitor; output goes to embed_<jobid>.log
 ---
 
 # Python API (Advanced Usage)
-MOSAICapp is also a Python library. You can import `mosaic_core` in your own scripts or Jupyter Notebooks for batch processing or custom analysis pipelines.
+MOSAICapp is also a Python library. Everything the app computes is implemented in
+`mosaic_core`, which does not depend on Streamlit, so it can be used from scripts,
+notebooks or HPC jobs. The Streamlit app is a graphical layer on top of it.
+
+| Module | Contents |
+|---|---|
+| `mosaic_core.core_functions` | preprocessing, sentence splitting, embedding, BERTopic, LLM labelling |
+| `mosaic_core.zeroshot` | zero-shot classification with similarity and margin thresholds |
+| `mosaic_core.comparison` | per-condition centred cosine, MAD-calibrated match threshold, hub z-scores, one-to-one matching, χ² / Cramér's V |
+| `mosaic_core.metrics` | topic diversity ratio, embedding coherence (C_embed), C_v coherence |
+
+To install only the library (no Streamlit): `pip install .`
+To install the app as well: `pip install ".[app]"` (or `pip install -r requirements.txt`).
 
 ## Library usage
+
+### Topic modelling
 ```python
 from mosaic_core.core_functions import preprocess_and_embed, run_topic_model
 
@@ -230,6 +244,44 @@ config = {
 model, reduced_embeddings, topics = run_topic_model(docs, embeddings, config)
 ```
 
+### Topic quality and participation
+```python
+from mosaic_core.metrics import embedding_coherence, topic_diversity
+
+c_embed = embedding_coherence(embeddings, model.topics_)
+# report_ids: which report each sentence came from (same order as docs)
+diversity = topic_diversity(model.topics_, report_ids)   # Topic, Total_Sentences, Unique_Reports, Diversity_Ratio
+```
+
+### Zero-shot classification
+```python
+from sentence_transformers import SentenceTransformer
+from mosaic_core.zeroshot import parse_categories, compute_zeroshot_similarities, apply_zeroshot_threshold
+
+encoder = SentenceTransformer("BAAI/bge-small-en-v1.5")   # same model that produced `embeddings`
+labels, line_labels, line_texts = parse_categories("""
+Visual imagery | seeing colours, shapes or geometric patterns
+Calm | feeling relaxed, peaceful or still
+""")
+sims = compute_zeroshot_similarities(embeddings, line_texts, encoder.encode)
+assignments, counts, per_doc = apply_zeroshot_threshold(sims, labels, line_labels,
+                                                        min_similarity=0.5, min_margin=0.02)
+```
+
+### Comparing two conditions
+```python
+import pandas as pd
+from mosaic_core.comparison import (parse_condition_csv, compute_condition_similarity,
+                                    calibrate_match_threshold, pair_zscores, greedy_match)
+
+topics_a = parse_condition_csv(pd.read_csv("topics_summary_conditionA.csv"))
+topics_b = parse_condition_csv(pd.read_csv("topics_summary_conditionB.csv"))
+
+sim, raw, _, _ = compute_condition_similarity(topics_a, topics_b, encoder.encode)
+calib = calibrate_match_threshold(sim, k=3.5)          # median + 3.5 x 1.4826 x MAD
+matches, only_a, only_b = greedy_match(sim, calib["threshold"], pair_zscores(sim), min_z=2.0)
+```
+
 
 ### Input format
 
@@ -237,27 +289,28 @@ CSV file with a text column. The app auto-detects columns named `text`, `report`
 
 
 ## Running Tests
-We include a test suite to verify the installation and core logic. This is useful to check if your environment is set up correctly.
+The test suite covers the `mosaic_core` library. This is also a quick way to check that
+your environment is set up correctly.
 
-**Run everything:**
 ```bash
-pytest tests/ -v
+pip install -e ".[dev]"
+pytest tests/ -v                 # everything (the integration tests download a model)
+CI=true pytest tests/ -v         # fast, offline tests only
 ```
 
-**Run only fast tests:**
-```bash
-pytest tests/test_core_functions.py -v
-```
+The fast tests use small deterministic inputs and check:
 
-This will automatically load a dummy dataset included in the repo and verify:
+- preprocessing and pipeline helpers (text-column detection, sentence splitting, caching)
+- zero-shot classification (category parsing, similarity and margin thresholds)
+- condition comparison (centred cosine, MAD-calibrated threshold, hub z-scores,
+  one-to-one matching, χ² / Cramér's V)
+- topic metrics (diversity ratio, embedding coherence, C_v)
+- that the library imports without Streamlit
 
-- Data loading (CSV parsing)
-
-- Embedding generation
-
-- Topic modelling pipeline
-
-- Visualisation outputs
+The integration tests (`tests/test_integration.py`) run the real embedding model and
+BERTopic pipeline on a dummy dataset. See [tests/tests.md](tests/tests.md) for details.
+CI runs the suite in the full app environment and in a library-only environment
+without Streamlit.
 
 
 ---

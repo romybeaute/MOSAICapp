@@ -2,7 +2,7 @@
 # Pinned dependency lockfile for MOSAICapp
 # Purpose: reproducible installs for tutorials / handouts.
 #
-# Verified on 2026-06-29 via a clean clone -> install -> `streamlit run app2.py`
+# Verified on 2026-06-29 via a clean clone -> install -> `streamlit run app2.py` (now `app.py`)
 # on macOS arm64 (Apple M1 Max), Python 3.13.7. App launched with MPS GPU.
 #
 # Usage (reproducible, recommended for the tutorial):

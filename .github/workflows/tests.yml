@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  # Full environment used by the Streamlit app / Hugging Face Space.
+  # test_integration.py skips itself when CI=true (it downloads models and calls the HF API).
+  app-environment:
     runs-on: ubuntu-latest
     env:
       CI: "true"
@@ -21,10 +23,42 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
-          pip install -e .
+          pip install -e ".[dev]"
 
       - name: Download NLTK data
         run: python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
 
-      - name: Run unit tests
-        run: pytest tests/test_core_functions.py -v
+      - name: Run tests
+        run: pytest tests/ -v
+
+  # The analysis library on its own: installs mosaic_core WITHOUT Streamlit
+  # and checks every method is importable and tested in that environment.
+  library-only:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install library (no app extras)
+        run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -e ".[dev]"
+
+      - name: Check Streamlit is not installed
+        run: |
+          if python -c "import streamlit" 2>/dev/null; then
+            echo "streamlit should not be a dependency of mosaic_core"; exit 1
+          fi
+
+      - name: Download NLTK data
+        run: python -c "import nltk; nltk.download('punkt_tab', quiet=True)"
+
+      - name: Run tests
+        run: pytest tests/ -v

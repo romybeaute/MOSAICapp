@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "MOSAICapp"
 version = "0.1.0"
-description = "MOSAICapp: Application for Mapping of Subjective Accounts into Interpreted Clusters"
+description = "MOSAIC: library and Streamlit app for Mapping of Subjective Accounts into Interpreted Clusters"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -26,23 +26,31 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-    "torch",
-    "streamlit>=1.37",
-    "pandas",
     "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn<1.6",
     "nltk",
+    "torch",
+    "sentence-transformers",
     "bertopic",
     "umap-learn",
     "hdbscan",
-    "scikit-learn<1.6",
-    "sentence-transformers",
-    "datamapplot",
     "huggingface_hub>=0.31.0",
-    "matplotlib",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# Streamlit interface (app.py) and its plotting stack
+app = [
+    "streamlit>=1.37",
+    "datamapplot",
+    "matplotlib",
+    "gensim>=4.0.0",
+    "seaborn",
+    "plotly",
+    "altair",
+]
+dev = ["pytest", "gensim>=4.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/romybeaute/MOSAICapp"

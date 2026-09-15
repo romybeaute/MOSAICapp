@@ -1501,8 +1501,9 @@ else:
             with st.expander("Model Quality Metrics (Coherence & Embeddings)"):
                 st.caption(
                     "These metrics assess topic quality. **Topic Coherence (C_v)** measures human interpretability "
-                    "(how often top words actually appear together in the text), while **Embedding Coherence** "
-                    "measures semantic tightness (how close the words are in the vector space)."
+                    "(how often top words actually appear together in the text), while **Embedding Coherence "
+                    "(C_embed)** measures semantic tightness (how close a topic's sentences sit to each other "
+                    "in the embedding space)."
                 )
                 
                 if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
@@ -1535,29 +1536,33 @@ else:
                         else:
                             c_v_score = 0.0
 
-                        # calculate Embedding Coherence (Proxy)
-                        # average cosine similarity of top 10 words in embedding space
+                        # Embedding coherence (C_embed), as defined in the MOSAIC paper:
+                        # each topic's average cosine similarity over all unique pairs of
+                        # its *sentence* embeddings, then averaged across topics
+                        # (outliers excluded). It is computed on the document embeddings
+                        # already in memory — nothing is re-encoded.
+                        #
+                        # Closed form: for unit vectors, sum_{i<j} cos(e_i,e_j) =
+                        # (||sum_i u_i||^2 - N) / 2, so a topic with thousands of
+                        # sentences costs O(N*d) instead of building an N x N matrix.
                         emb_coh_score = 0.0
+                        _emb_arr = np.asarray(embeddings, dtype=np.float64)
+                        _topic_arr = np.asarray(tm.topics_)
+                        if len(_topic_arr) == len(_emb_arr):
+                            _unit = _emb_arr / np.clip(
+                                np.linalg.norm(_emb_arr, axis=1, keepdims=True), 1e-12, None
+                            )
+                            _intra = []
+                            for t in unique_topics:
+                                _u = _unit[_topic_arr == t]
+                                n_k = len(_u)
+                                if n_k < 2:
+                                    continue  # a pairwise average needs at least two sentences
+                                _s = _u.sum(axis=0)
+                                _intra.append((float(_s @ _s) - n_k) / (n_k * (n_k - 1)))
+                            if _intra:
+                                emb_coh_score = float(np.mean(_intra))
 
-                        active_embedding_model = load_embedding_model(selected_embedding_model)
-                        if topics_top_words:
-                            total_sim = 0
-                            valid_topics = 0
-                            for words in topics_top_words:
-                                if len(words) < 2: continue
-                                
-                                word_embs = active_embedding_model.encode(words)
-                                
-                                sim_matrix = np.inner(word_embs, word_embs)
-                                tri_u = sim_matrix[np.triu_indices(len(words), k=1)]
-                                
-                                if len(tri_u) > 0:
-                                    total_sim += np.mean(tri_u)
-                                    valid_topics += 1
-                            
-                            if valid_topics > 0:
-                                emb_coh_score = total_sim / valid_topics
-                        
                         st.session_state.quality_metrics = (c_v_score, emb_coh_score)
                         st.session_state.quality_metrics_hash = get_config_hash(current_config)
                 
@@ -1571,9 +1576,12 @@ else:
                     help="Measures how often the top words in a topic appear together in the original text. Good values: 0.5 - 0.7."
                 )
                 qc2.metric(
-                    "Embedding Coherence", 
-                    f"{emb_coh:.3f}", 
-                    help="Measures how mathematically close the top words are in the vector space. Higher means tighter semantic clusters."
+                    "Embedding Coherence (C_embed)",
+                    f"{emb_coh:.3f}",
+                    help="Average cosine similarity between every pair of sentences inside a topic, "
+                         "averaged over topics (outliers excluded). Higher means semantically tighter "
+                         "clusters. Absolute values are model-dependent, so compare runs that use the "
+                         "same embedding model."
                 )
             
             with st.expander("Show topic-size overview"):

@@ -1,8 +1,7 @@
 """
-File: app.py
-Description: Streamlit app for advanced topic modeling on Innerspeech dataset
-             with BERTopic, UMAP, HDBSCAN. (LLM features disabled for lite deployment)
-Last Modified: 21/04/2026
+File: app2.py
+Description: Streamlit interface for the MOSAIC pipeline (BERTopic, UMAP, HDBSCAN, LLM labelling).
+Last Modified: 26/08/2026
 @corresp author: r.beaut@sussex.ac.uk
 """
 
@@ -43,17 +42,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 import plotly.graph_objects as go
 import plotly.express as px
 
-
-#to remove funciton locally defined here, we can use importing from mosaic_core
-# from mosaic_core.core_functions import (
-#     pick_text_column, list_text_columns, slugify, clean_label,
-#     get_config_hash, make_run_id, cleanup_old_cache,
-#     load_csv_texts, count_clean_reports, preprocess_texts,
-#     run_topic_model, get_topic_labels, get_outlier_stats, get_num_topics,
-#     SYSTEM_PROMPT, USER_TEMPLATE, generate_llm_labels,
-#     labels_cache_path, load_cached_labels, save_labels_cache,
-#     get_hf_status_code,
-# )
 
 
 
@@ -1250,9 +1238,22 @@ def compute_condition_similarity(
        how many sentences the other condition happens to contain.
     2. Interpretability. Each topic vector becomes that topic's deviation from
        its own condition's average, and the size-weighted mean of those deviations
-       is exactly zero in both conditions. That makes 0 a genuine "unrelated"
-       baseline (measured background median on real data: -0.01), so the score
-       reads like a correlation of topic profiles.
+       is exactly zero in both conditions. The background therefore sits *near*
+       zero (measured median on real data: -0.01), which is what makes the scale
+       discriminative.
+
+    Two things this score is not. It is not a Pearson correlation: correlation is
+    the cosine of vectors centred across the dimensions being dotted, whereas the
+    centroid subtracted here is a per-dimension mean over sentences. And zero is
+    an empirical, not an exact, no-correspondence point — the size-weighted mean
+    of the *unnormalised* deviations vanishes, but the mean of their pairwise
+    cosines does not. Nothing downstream assumes it does: `calibrate_match_threshold`
+    estimates the background median from the matrix rather than fixing it at 0.
+
+    Note also that centring per condition removes the between-condition mean
+    difference by construction. That is what makes topics comparable on their
+    within-condition profiles, but it means a *global* content shift between the
+    two conditions is invisible to this score.
     """
     names_a = list(topics_a.keys())
     names_b = list(topics_b.keys())
@@ -1262,7 +1263,7 @@ def compute_condition_similarity(
     occ_b = [s for name in names_b for s in topics_b[name]]
     unique_sents = list(dict.fromkeys(occ_a + occ_b))
     if not unique_sents:
-        return pd.DataFrame(), np.empty((0, 0)), np.empty((0, 0))
+        return pd.DataFrame(), pd.DataFrame(), np.empty((0, 0)), np.empty((0, 0))
 
     embeddings = np.asarray(_embed_sentences(tuple(unique_sents), model_name), dtype=np.float64)
     pos = {s: i for i, s in enumerate(unique_sents)}
@@ -1405,6 +1406,49 @@ def pair_zscores(sim_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(np.minimum(z_row, z_col), index=sim_df.index, columns=sim_df.columns)
 
 
+# def greedy_match(sim_df: pd.DataFrame, threshold: float,
+#                  z_df: pd.DataFrame | None = None, min_z: float | None = None):
+#     """One-to-one greedy matching: repeatedly take the highest remaining score.
+
+#     Returns (matches, unmatched_a, unmatched_b) where each match is a dict with
+#     the score, `z_min`, and whether the pair is a reciprocal best hit.
+#     """
+#     unmatched_a = list(sim_df.index)
+#     unmatched_b = list(sim_df.columns)
+#     matches: list[dict] = []
+#     if sim_df.empty:
+#         return matches, unmatched_a, unmatched_b
+
+#     S = sim_df.values.astype(np.float64).copy()
+#     S[~np.isfinite(S)] = -np.inf
+#     # Reciprocal best hit is a property of the original matrix, so record it first.
+#     best_for_row = S.argmax(axis=1)
+#     best_for_col = S.argmax(axis=0)
+#     rows, cols = list(sim_df.index), list(sim_df.columns)
+#     work = S.copy()
+
+#     for _ in range(min(S.shape)):
+#         flat = int(np.argmax(work))
+#         i, j = divmod(flat, work.shape[1])
+#         score = float(work[i, j])
+#         if not np.isfinite(score) or score < threshold:
+#             break
+#         z_min = float(z_df.iat[i, j]) if z_df is not None and not z_df.empty else float("nan")
+#         if min_z is None or not np.isfinite(z_min) or z_min >= min_z:
+#             matches.append({
+#                 "a": rows[i], "b": cols[j], "score": score, "z_min": z_min,
+#                 "reciprocal_best": bool(best_for_row[i] == j and best_for_col[j] == i),
+#             })
+#             unmatched_a.remove(rows[i])
+#             unmatched_b.remove(cols[j])
+#             work[i, :] = -np.inf
+#             work[:, j] = -np.inf
+#         else:
+#             # Rejected on z_min only: retire this cell, leave both topics available.
+#             work[i, j] = -np.inf
+#     return matches, unmatched_a, unmatched_b
+
+
 def greedy_match(sim_df: pd.DataFrame, threshold: float,
                  z_df: pd.DataFrame | None = None, min_z: float | None = None):
     """One-to-one greedy matching: repeatedly take the highest remaining score.
@@ -1426,7 +1470,8 @@ def greedy_match(sim_df: pd.DataFrame, threshold: float,
     rows, cols = list(sim_df.index), list(sim_df.columns)
     work = S.copy()
 
-    for _ in range(min(S.shape)):
+    n_max = min(S.shape)
+    while len(matches) < n_max:
         flat = int(np.argmax(work))
         i, j = divmod(flat, work.shape[1])
         score = float(work[i, j])
@@ -1443,9 +1488,10 @@ def greedy_match(sim_df: pd.DataFrame, threshold: float,
             work[i, :] = -np.inf
             work[:, j] = -np.inf
         else:
-            # Rejected on z_min only: retire this cell, leave both topics available.
             work[i, j] = -np.inf
     return matches, unmatched_a, unmatched_b
+
+
 
 
 def generate_and_save_embeddings(
@@ -2062,7 +2108,7 @@ Witness Consciousness"""
 # Built-in questionnaire / category sets the user can load into the zero-shot
 # classifier. Keys are the names shown in the picker.
 _BUILTIN_QUESTIONNAIRES = {
-    "MPE92": _ZS_DEFAULT_CATEGORIES,
+    "MPE-92": _ZS_DEFAULT_CATEGORIES,
     "11D-ASC": """\
 Experience of Unity
 Spiritual Experience
@@ -2124,7 +2170,7 @@ _SAVED_SUFFIX = " (saved)"
 def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
     """Render the questionnaire preset picker + editable categories text area.
 
-    Lets the user load a built-in questionnaire (MPE92, 11D-ASC, …) or any
+    Lets the user load a built-in questionnaire (MPE-92, 11D-ASC, …) or any
     previously saved set, edit the list freely, and save the current list under
     a new name for future use. Returns the raw categories text (one per line).
     """
@@ -2249,7 +2295,11 @@ def _cond_threshold_ui(sim_df: pd.DataFrame, key_suffix: str = ""):
                      "**Lenient (3.0)** casts a wider net — use when you would rather "
                      "review a few false matches than miss a real one.\n"
                      "**Balanced (3.5)** is the default.\n"
-                     "**Strict (4.0)** keeps only unambiguous correspondences.",
+                     "**Strict (4.0)** keeps only unambiguous correspondences.\n\n"
+                     "Where 3.5 comes from: it reproduces the best-F1 cut-off against "
+                     "hand-labelled matches on one 36×43 comparison. That is a single "
+                     "dataset, so treat it as a sensible starting point rather than a "
+                     "validated constant — check the matches it gives you.",
             )
         calib = calibrate_match_threshold(sim_df, STRINGENCY_LEVELS[level])
         threshold = calib["threshold"]
@@ -2363,11 +2413,15 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         "content lines up.  \n\n"
         "Each topic's sentences are embedded, then centered on their own condition's "
         "average, so a topic vector is that theme's *deviation* from what its condition "
-        "talks about overall. Reading the resulting **match score**:  \n"
+        "talks about overall. Because each condition is centered on itself, the score "
+        "compares topics on their profile *within* a condition — an overall content "
+        "shift between the two conditions does not show up here. Reading the resulting "
+        "**match score**:  \n"
         "• **~0.9** — the same topic (measured by splitting one dataset in half and "
         "comparing it with itself)  \n"
         "• **~0.6+** — a real correspondence  \n"
-        "• **0** — unrelated  \n"
+        "• **~0** — unrelated (the no-match baseline is empirical and sits near zero, "
+        "not exactly at it)  \n"
         "• **negative** — no match; the size of a negative number carries no meaning, "
         "so don't read −0.5 as 'more opposite' than −0.1.  \n\n"
         "Scores look much smaller than plain cosine similarity on purpose: plain cosine "
@@ -2492,7 +2546,7 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         cbar_kws={"shrink": 0.75, "pad": 0.02}, ax=ax_heat,
     )
     ax_heat.collections[0].colorbar.set_label(
-        f"Match score:  0 = unrelated  ·  {threshold:.2f} = match  ·  ~0.9 = same topic",
+        f"Match score:  ~0 = unrelated  ·  {threshold:.2f} = match  ·  ~0.9 = same topic",
         fontsize=8, labelpad=8)
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=8)
     ax_heat.set_title(f"Semantic similarity: {name_a}  vs  {name_b}",
@@ -2537,7 +2591,7 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         _raw_floor = float(raw_df.values.min()) if not raw_df.empty else float("nan")
         st.caption(
             f"**`match_score`** — the centered score all matching decisions use. "
-            f"0 = unrelated, {threshold:.2f}+ = a match, ~0.9 = the same topic.  \n"
+            f"~0 = unrelated, {threshold:.2f}+ = a match, ~0.9 = the same topic.  \n"
             f"**`raw_overlap`** — plain similarity of the two topics, for interpretation "
             f"only. It does *not* start at 0: with this embedding model the least similar "
             f"pair in your data scores {_raw_floor:.2f}, so read ~{_raw_floor:.2f} as "
@@ -2600,6 +2654,14 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             f"**Well calibrated.** {len(matches)} matches vs. ~{exp_chance:.1f} "
             f"expected by chance ({enrichment:.0f}× enrichment)."
         )
+    st.caption(
+        "The chance figure is an order-of-magnitude guide, not a false-discovery "
+        "rate. It assumes the cells of the matrix are independent draws from a "
+        "normal background, and they are not — every cell in a row shares one "
+        "topic vector, so the number of genuinely independent comparisons is well "
+        "below rows × columns. Use it to tell 'clearly enriched' from 'barely "
+        "above noise', not to quote an error rate."
+    )
     st.caption(
         "These are statistical guard rails, not semantic ones. Embeddings place "
         "opposites in the same region — a genuinely high score between, say, "
@@ -2668,11 +2730,19 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
                   .drop(columns="_total").reset_index(drop=True))
 
     # ── Chi-squared on the *paired* themes only ───────────────────
-    # Rows for condition-specific topics contain a structural zero (a theme absent
-    # from one condition by construction, not by sampling). Including them makes
-    # the test reject essentially always and inflates chi2 without meaning. The
-    # answerable question is whether the *shared* themes are used in different
-    # proportions, so the test is restricted to paired rows.
+    # Rows for condition-specific topics contain a zero produced by modelling the
+    # two conditions separately, not by sampling: the topic solution for one
+    # condition simply has no such theme. Including those rows makes the test
+    # reject essentially always and inflates chi2 without meaning. The answerable
+    # question is whether the *shared* themes are used in different proportions,
+    # so the test is restricted to paired rows.
+    #
+    # Caveat that no restriction can fix: the counts are sentences, and sentences
+    # are nested within participants/reports. The exported topics_summary CSV
+    # carries no participant id, so a cluster-robust or participant-level test is
+    # not computable here. chi2 and p therefore scale with a sample size that is
+    # inflated by within-participant repetition; Cramer's V divides n out and is
+    # the quantity to report.
     paired = ct_df[ct_df["type"] == "paired"]
     table = paired[["_a", "_b"]].to_numpy(dtype=float)
     table = table[table.sum(axis=1) > 0]
@@ -2687,23 +2757,38 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             chi2_stat, p_val, dof, expected = chi2_contingency(table)
             n_obs = float(table.sum())
             cramers_v = float(np.sqrt(chi2_stat / (n_obs * (min(table.shape) - 1))))
+            # Cramér's V first, deliberately: it is the interpretable quantity here
+            # (see the nesting caveat above), and p is reported descriptively.
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("χ² statistic", f"{chi2_stat:.2f}")
-            c2.metric("df", dof)
-            c3.metric("p-value", f"{p_val:.4g}")
-            c4.metric("Cramér's V", f"{cramers_v:.3f}",
-                      help="Effect size: ~0.1 small, ~0.3 medium, ~0.5 large. With "
-                           "thousands of sentences a tiny difference can be highly "
-                           "significant, so read V alongside p.")
-            if p_val < 0.05:
-                st.success(
-                    f"p = {p_val:.4g} < 0.05 — the shared themes are used in "
-                    f"significantly different proportions in {name_a} vs {name_b} "
-                    f"(Cramér's V = {cramers_v:.3f})."
-                )
-            else:
-                st.info(f"p = {p_val:.4g} ≥ 0.05 — no significant difference in how "
-                        "the shared themes are distributed.")
+            c1.metric("Cramér's V", f"{cramers_v:.3f}",
+                      help="Effect size, and the number to report: ~0.1 small, "
+                           "~0.3 medium, ~0.5 large. Unlike χ² and p it does not "
+                           "grow with the number of sentences.")
+            c2.metric("χ² statistic", f"{chi2_stat:.2f}")
+            c3.metric("df", dof)
+            c4.metric("p-value (descriptive)", f"{p_val:.4g}",
+                      help="Sentences from the same participant are not independent, "
+                           "so this p-value is anti-conservative. Read it as a rough "
+                           "indicator, not as a test result.")
+            _v_size = ("negligible" if cramers_v < 0.1 else
+                       "small" if cramers_v < 0.3 else
+                       "moderate" if cramers_v < 0.5 else "large")
+            st.info(
+                f"**Cramér's V = {cramers_v:.3f}** — a {_v_size} difference in how the "
+                f"shared themes are distributed across {name_a} vs {name_b}. "
+                f"(χ²({dof}) = {chi2_stat:.2f}, p = {p_val:.4g}, descriptive only.)"
+            )
+            st.caption(
+                "**Why p is not the headline here.** The counts are sentences, and "
+                "sentences from the same participant are correlated, so the effective "
+                "sample size is smaller than the sentence total and p is smaller than "
+                "it should be — with a few thousand sentences a trivial difference "
+                "reaches p < 0.001. Cramér's V is unaffected by that inflation. The "
+                "uploaded summary CSVs carry no participant id, so a participant-level "
+                "or cluster-robust test cannot be run from them. Note too that the "
+                "shared themes were selected by the matching step on this same data, "
+                "so the test is conditional on that pairing."
+            )
             small = float((expected < 5).mean())
             if small > 0.2:
                 st.warning(
@@ -2715,10 +2800,10 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
             if n_only_a or n_only_b:
                 st.caption(
                     f"Excluded from the test: {n_only_a} theme(s) unique to {name_a} "
-                    f"and {n_only_b} unique to {name_b}. These are structural zeros — "
-                    "a theme absent from one condition by construction — and would "
-                    "force significance regardless of the data. Report them as "
-                    "condition-specific findings instead."
+                    f"and {n_only_b} unique to {name_b}. Their zeros come from having "
+                    "modelled each condition separately rather than from sampling, so "
+                    "including them would force significance regardless of the data. "
+                    "Report them as condition-specific findings instead."
                 )
         except ValueError as e:
             st.warning(f"Chi-squared test could not be computed: {e}")
@@ -3068,15 +3153,18 @@ if not os.path.exists(EMBEDDINGS_FILE):
                 # Search all dataset caches for a topics.json matching the uploaded doc count
                 _n_docs = len(sa_zs_topics)
                 _matched_cache = None
-                for _candidate in (Path(__file__).parent / "data").glob("*/preprocessed/cache/topics.json"):
-                    try:
-                        with open(_candidate) as _f:
-                            _candidate_topics = json.load(_f)
-                        if len(_candidate_topics) == _n_docs:
-                            _matched_cache = _candidate.parent
-                            break
-                    except Exception:
-                        continue
+                _candidate = CACHE_DIR / "topics.json"
+                if _candidate.exists() and _json_len(_candidate) == _n_docs:
+                    _matched_cache = CACHE_DIR
+                # for _candidate in (Path(__file__).parent / "data").glob("*/preprocessed/cache/topics.json"):
+                #     try:
+                #         with open(_candidate) as _f:
+                #             _candidate_topics = json.load(_f)
+                #         if len(_candidate_topics) == _n_docs:
+                #             _matched_cache = _candidate.parent
+                #             break
+                #     except Exception:
+                #         continue
 
                 if _matched_cache is None:
                     st.info("BERTopic cross-reference not available — no matching `topics.json` found. Run the full pipeline on this dataset first.")
@@ -3093,7 +3181,8 @@ if not os.path.exists(EMBEDDINGS_FILE):
                     if not _topic_files:
                         _topic_files = [_matched_cache / "topics.json"]
 
-                    _dataset_key = _matched_cache.parent.parent.name
+                    # _dataset_key = _matched_cache.parent.parent.name
+                    _dataset_key = DATASET_DIR
                     _prefs = _load_xref_prefs().get(_dataset_key, {})
 
                     _xc1, _xc2 = st.columns(2)
@@ -3645,8 +3734,9 @@ else:
             with st.expander("Model Quality Metrics (Coherence & Embeddings)"):
                 st.caption(
                     "These metrics assess topic quality. **Topic Coherence (C_v)** measures human interpretability "
-                    "(how often top words actually appear together in the text), while **Embedding Coherence** "
-                    "measures semantic tightness (how close the words are in the vector space)."
+                    "(how often top words actually appear together in the text), while **Embedding Coherence "
+                    "(C_embed)** measures semantic tightness (how close a topic's sentences sit to each other "
+                    "in the embedding space)."
                 )
                 
                 if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
@@ -3695,29 +3785,33 @@ else:
                         else:
                             c_v_score = 0.0
 
-                        # calculate Embedding Coherence (Proxy)
-                        # average cosine similarity of top 10 words in embedding space
+                        # Embedding coherence (C_embed), as defined in the MOSAIC paper:
+                        # each topic's average cosine similarity over all unique pairs of
+                        # its *sentence* embeddings, then averaged across topics
+                        # (outliers excluded). It is computed on the document embeddings
+                        # already in memory — nothing is re-encoded.
+                        #
+                        # Closed form: for unit vectors, sum_{i<j} cos(e_i,e_j) =
+                        # (||sum_i u_i||^2 - N) / 2, so a topic with thousands of
+                        # sentences costs O(N*d) instead of building an N x N matrix.
                         emb_coh_score = 0.0
+                        _emb_arr = np.asarray(embeddings, dtype=np.float64)
+                        _topic_arr = np.asarray(tm.topics_)
+                        if len(_topic_arr) == len(_emb_arr):
+                            _unit = _emb_arr / np.clip(
+                                np.linalg.norm(_emb_arr, axis=1, keepdims=True), 1e-12, None
+                            )
+                            _intra = []
+                            for t in unique_topics:
+                                _u = _unit[_topic_arr == t]
+                                n_k = len(_u)
+                                if n_k < 2:
+                                    continue  # a pairwise average needs at least two sentences
+                                _s = _u.sum(axis=0)
+                                _intra.append((float(_s @ _s) - n_k) / (n_k * (n_k - 1)))
+                            if _intra:
+                                emb_coh_score = float(np.mean(_intra))
 
-                        active_embedding_model = load_embedding_model(selected_embedding_model)
-                        if topics_top_words:
-                            total_sim = 0
-                            valid_topics = 0
-                            for words in topics_top_words:
-                                if len(words) < 2: continue
-                                
-                                word_embs = active_embedding_model.encode(words)
-                                
-                                sim_matrix = np.inner(word_embs, word_embs)
-                                tri_u = sim_matrix[np.triu_indices(len(words), k=1)]
-                                
-                                if len(tri_u) > 0:
-                                    total_sim += np.mean(tri_u)
-                                    valid_topics += 1
-                            
-                            if valid_topics > 0:
-                                emb_coh_score = total_sim / valid_topics
-                        
                         st.session_state.quality_metrics = (c_v_score, emb_coh_score)
                         st.session_state.quality_metrics_hash = get_config_hash(current_config)
                 
@@ -3731,9 +3825,12 @@ else:
                     help="Measures how often the top words in a topic appear together in the original text. Good values: 0.5 - 0.7."
                 )
                 qc2.metric(
-                    "Embedding Coherence", 
-                    f"{emb_coh:.3f}", 
-                    help="Measures how mathematically close the top words are in the vector space. Higher means tighter semantic clusters."
+                    "Embedding Coherence (C_embed)",
+                    f"{emb_coh:.3f}",
+                    help="Average cosine similarity between every pair of sentences inside a topic, "
+                         "averaged over topics (outliers excluded). Higher means semantically tighter "
+                         "clusters. Absolute values are model-dependent, so compare runs that use the "
+                         "same embedding model."
                 )
             
             with st.expander("Show topic-size overview"):
@@ -4313,7 +4410,7 @@ else:
             )
             st.markdown("---")
 
-            cL, cC, cR = st.columns(3)
+            cL, cR = st.columns(2)
 
             with cL:
                 csv_name = f"topics_summary_{base}_{gran}.csv"
@@ -4324,11 +4421,6 @@ else:
                     mime="text/csv",
                     use_container_width=True
                 )
-
-            with cC:
-                jsonl_name = f"topics_{base}_{gran}.jsonl"
-                if st.button("Save JSONL to eval/", use_container_width=True):
-                    st.success(f"Saved JSONL")
 
             with cR:
                 long_csv_name = f"all_sentences_{base}_{gran}.csv"
@@ -4642,10 +4734,10 @@ similarity between their topic vectors.
 **What the comparison does:**
 - All sentences in each topic are embedded using `{selected_embedding_model}` (same model as the sidebar)
 - Each topic is represented by the **mean vector** of its sentences, **centered on its own condition's average** — so a topic vector is that theme's deviation from what the condition talks about overall
-- A **centered cosine** is computed between every pair of topics across conditions: +1 = same theme, 0 = unrelated, negative = contrasting
+- A **centered cosine** is computed between every pair of topics across conditions: +1 = same theme, ~0 = unrelated, negative = no match. Because each condition is centered on itself, this compares topics on their profile *within* a condition — an overall content shift between the two conditions is invisible to it
 - The **match threshold is calibrated from your own data** (see the *Match threshold* section) rather than fixed, because a raw number like 0.50 does not transfer between embedding models or corpora
-- A greedy algorithm finds the best one-to-one pairs above the threshold, and reports how many would be expected by chance
-- Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test, and a frequency bar chart
+- A greedy algorithm finds the best one-to-one pairs above the threshold, and reports roughly how many would be expected by chance — an order-of-magnitude guide, not a false-discovery rate
+- Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test (report **Cramér's V**, not p — see that section), and a frequency bar chart
                 """
             )
 

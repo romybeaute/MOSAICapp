@@ -5,6 +5,11 @@ __pycache__/
 # Streamlit local secrets (never commit)
 .streamlit/secrets.toml
 
+# Local UI state (saved prompts, questionnaires, cross-reference file choices)
+.mosaic_user_prompts.json
+.mosaic_questionnaires.json
+.mosaic_xref_prefs.json
+
 # Editor junk
 .DS_Store
 MOSAICapp.code-workspace
@@ -31,3 +36,6 @@ data/*/preprocessed/cache/
 eval/
 !eval/.gitkeep
 !eval/**/.gitkeep
+
+# Local tutorial datasets (participant data, never commit)
+data-tutorial/

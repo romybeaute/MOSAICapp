@@ -34,11 +34,7 @@ import uuid
 from datetime import datetime
 import altair as alt
 
-from gensim.corpora import Dictionary
-from gensim.models import CoherenceModel
 import seaborn as sns
-from scipy.stats import chi2_contingency, norm
-from sklearn.metrics.pairwise import cosine_similarity
 import plotly.graph_objects as go
 import plotly.express as px
 
@@ -98,6 +94,25 @@ except Exception:
     def eval_path(*parts: str) -> Path:
         return _EVAL_ROOT.joinpath(*parts)
 
+
+# MOSAIC analysis library (Streamlit-free; the methods themselves live here)
+from mosaic_core.zeroshot import (
+    parse_categories as _zs_parse_categories,
+    embeddings_fingerprint as _zs_embeddings_fingerprint,
+    compute_zeroshot_similarities as _core_zeroshot_similarities,
+    apply_zeroshot_threshold,
+)
+from mosaic_core.comparison import (
+    STRINGENCY_LEVELS,
+    parse_condition_csv as _parse_condition_csv,
+    compute_condition_similarity as _core_condition_similarity,
+    calibrate_match_threshold,
+    describe_threshold,
+    pair_zscores,
+    greedy_match,
+    shared_theme_chi2,
+)
+from mosaic_core.metrics import embedding_coherence, topic_coherence_cv, topic_diversity
 
 # BERTopic stack
 from bertopic import BERTopic
@@ -809,130 +824,23 @@ def perform_topic_modeling(_docs, _embeddings, config_hash, dataset_key=""):
 # 5b. Zero-shot helpers
 # =====================================================================
 
-def _zs_parse_categories(raw: str) -> tuple[list[str], list[str], list[str]]:
-    """Parse the categories text area into (labels, line_labels, line_texts).
-
-    Each non-empty line is either a bare label ("Anxiety") or
-    "Label | description of what belongs to it" — the description is embedded
-    together with the label, which anchors the category vector in the same
-    register as real sentences instead of an abstract two-word title.
-    Several lines may share the same label (e.g. one questionnaire item per
-    line); a document's similarity to a label is the max over that label's lines.
-    """
-    labels: list[str] = []
-    line_labels: list[str] = []
-    line_texts: list[str] = []
-    for line in raw.strip().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if "|" in line:
-            label, desc = line.split("|", 1)
-            label, desc = label.strip(), desc.strip()
-            text = f"{label}: {desc}" if desc else label
-        else:
-            label, text = line, line
-        if not label:
-            continue
-        if label not in labels:
-            labels.append(label)
-        line_labels.append(label)
-        line_texts.append(text)
-    return labels, line_labels, line_texts
-
-
-def _zs_embeddings_fingerprint(embeddings: np.ndarray) -> str:
-    """Cheap content hash of the document embeddings for cache keying.
-
-    Hashing the full array can be slow for large corpora × high-dim models,
-    so hash the shape plus a strided sample of rows — enough to distinguish
-    two datasets that happen to have the same number of documents."""
-    arr = np.ascontiguousarray(embeddings)
-    step = max(1, len(arr) // 512)
-    h = hashlib.sha1()
-    h.update(str(arr.shape).encode())
-    h.update(arr[::step].tobytes())
-    return h.hexdigest()
+# Parsing, fingerprinting and thresholding come from mosaic_core.zeroshot.
 
 
 @st.cache_data
 def compute_zeroshot_similarities(_embeddings, emb_fingerprint, line_texts, embedding_model_name):
-    """Cosine similarity between every document and every category line.
+    """Cached wrapper around `mosaic_core.zeroshot.compute_zeroshot_similarities`.
 
     This is the expensive, threshold-independent half of zero-shot
-    classification (the same computation BERTopic performs internally with
-    `zeroshot_topic_list`): encode the category lines, then compare them to
-    the precomputed document embeddings. `_embeddings` is excluded from the
-    cache key (leading underscore); `emb_fingerprint` stands in for it.
+    classification. `_embeddings` is excluded from the cache key (leading
+    underscore); `emb_fingerprint` stands in for it.
     """
     emb_model = load_embedding_model(embedding_model_name)
-    doc_emb = np.asarray(_embeddings)
-
-    # Guard: the category lines are encoded with `embedding_model_name`, while
-    # the documents use the (possibly precomputed) `_embeddings`. If the
-    # dimensions differ, fail here with an actionable message instead of a
-    # cryptic matrix-shape error.
-    cat_emb = np.asarray(emb_model.encode(list(line_texts), convert_to_numpy=True))
-    if cat_emb.shape[1] != doc_emb.shape[1]:
-        raise ValueError(
-            f"Embedding-model mismatch: your document embeddings are {doc_emb.shape[1]}-dim, "
-            f"but '{embedding_model_name}' produces {cat_emb.shape[1]}-dim vectors. "
-            "Select the SAME embedding model in the sidebar that you used to create "
-            "the precomputed .npy (e.g. Qwen/Qwen3-Embedding-4B → 2560-dim)."
-        )
-    return cosine_similarity(doc_emb, cat_emb)
-
-
-def apply_zeroshot_threshold(line_sims, labels, line_labels, min_similarity, min_margin=0.0):
-    """Turn the doc × category-line similarity matrix into assignments.
-
-    A label's similarity is the max over its lines. A document is assigned to
-    its best label when best similarity ≥ min_similarity AND the best label
-    beats the runner-up by ≥ min_margin (ambiguous docs sit between category
-    vectors; the margin filter leaves them Unclassified). Pure numpy — cheap
-    enough to re-run live whenever a slider moves.
-
-    Returns (topics, topic_info, per_doc) where `topics` is a list with -1 for
-    unclassified, `topic_info` mirrors BERTopic's get_topic_info columns
-    (Topic / Name / Count, only categories with Count > 0, plus the -1 row),
-    and `per_doc` holds best_category / confidence / margin / runner_up for
-    every document regardless of threshold.
-    """
-    labels = list(labels)
-    label_sims = np.column_stack([
-        line_sims[:, [i for i, ll in enumerate(line_labels) if ll == lab]].max(axis=1)
-        for lab in labels
-    ])
-    n = label_sims.shape[0]
-    order = np.argsort(-label_sims, axis=1)
-    best = order[:, 0]
-    best_sim = label_sims[np.arange(n), best]
-    if len(labels) > 1:
-        second = order[:, 1]
-        margin = best_sim - label_sims[np.arange(n), second]
-        runner_up = [labels[i] for i in second]
-    else:
-        margin = np.full(n, np.inf)
-        runner_up = [""] * n
-
-    assigned = (best_sim >= min_similarity) & (margin >= min_margin)
-    topics = np.where(assigned, best, -1)
-
-    rows = []
-    counts = np.bincount(topics[assigned], minlength=len(labels)) if assigned.any() else np.zeros(len(labels), int)
-    for i, lab in enumerate(labels):
-        if counts[i] > 0:
-            rows.append({"Topic": i, "Name": lab, "Count": int(counts[i])})
-    rows.append({"Topic": -1, "Name": "Unclassified", "Count": int((~assigned).sum())})
-    topic_info = pd.DataFrame(rows, columns=["Topic", "Name", "Count"])
-
-    per_doc = pd.DataFrame({
-        "best_category": [labels[i] for i in best],
-        "confidence": np.round(best_sim, 4),
-        "margin": np.round(np.where(np.isfinite(margin), margin, np.nan), 4),
-        "runner_up": runner_up,
-    })
-    return topics.tolist(), topic_info, per_doc
+    return _core_zeroshot_similarities(
+        _embeddings, line_texts,
+        lambda texts: emb_model.encode(texts, convert_to_numpy=True),
+        model_name=embedding_model_name,
+    )
 
 
 def _zs_similarity_histogram(best_sim, min_similarity, min_margin, margin):
@@ -1140,43 +1048,7 @@ def _zs_uncovered_topics_ui(bt_labels, zs_categories, min_similarity, key_prefix
 # 5c. Condition-comparison helpers
 # =====================================================================
 
-def _parse_condition_csv(df: pd.DataFrame) -> dict[str, list[str]]:
-    """
-    Accept two CSV formats exported by the main pipeline and return
-    {topic_name: [sentence, sentence, ...]}
-
-    Supported formats:
-    - "Row per topic"   : columns include `topic_name` and `texts` (pipe-separated)
-    - "Long / all-sentences" : columns include `Topic Name` and `Document`
-    """
-    if "topic_name" in df.columns and "texts" in df.columns:
-        out: dict[str, list[str]] = {}
-        for _, row in df.iterrows():
-            # Topic -1 is BERTopic's outlier bin: a grab-bag of unrelated sentences,
-            # not a theme. Its mean vector is meaningless, so never match on it.
-            if "Topic" in df.columns and pd.to_numeric(row["Topic"], errors="coerce") == -1:
-                continue
-            name = str(row["topic_name"]).strip()
-            if name in ("Unlabelled", "Outlier", "Too Specific (Idiosyncratic)", ""):
-                continue
-            texts_raw = row["texts"]
-            if not isinstance(texts_raw, str) or not texts_raw.strip():
-                continue
-            sentences = [s.strip() for s in texts_raw.split(" | ") if s.strip()]
-            if sentences:
-                out[name] = sentences
-        return out
-    if "Topic Name" in df.columns and "Document" in df.columns:
-        out = {}
-        for _, row in df.iterrows():
-            name = str(row["Topic Name"]).strip()
-            if name in ("Unlabelled", "Outlier", "Too Specific (Idiosyncratic)", ""):
-                continue
-            sentence = str(row["Document"]).strip()
-            if sentence:
-                out.setdefault(name, []).append(sentence)
-        return out
-    return {}
+# CSV parsing, similarity, calibration and matching come from mosaic_core.comparison.
 
 
 @st.cache_data
@@ -1214,282 +1086,11 @@ def _embed_sentences(sentences: tuple[str, ...], model_name: str) -> np.ndarray:
 
 
 @st.cache_data
-def compute_condition_similarity(
-    topics_a: dict,
-    topics_b: dict,
-    model_name: str,
-) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """
-    Given two dicts of {topic_name: [sentences]}, embed all sentences,
-    build mean topic vectors, and return (similarity_matrix_df, vec_a, vec_b).
-
-    Scores are *centered* cosines. Raw sentence-transformer embeddings are
-    anisotropic — they occupy a narrow cone, so every pair of topics scores
-    ~0.6–0.98 and unrelated themes look "strongly correlated" (measured on real
-    data: min raw cosine across a 36x43 topic matrix was 0.55). Centering removes
-    that shared component and restores a discriminative range.
-
-    Centering is done **per condition** (each condition's sentences are centered
-    on that condition's own centroid) rather than on the pooled centroid, for two
-    reasons:
-
-    1. Reproducibility. The pooled centroid is a size-weighted blend of the two
-       conditions, so the *same* pair of topics scores differently depending on
-       how many sentences the other condition happens to contain.
-    2. Interpretability. Each topic vector becomes that topic's deviation from
-       its own condition's average, and the size-weighted mean of those deviations
-       is exactly zero in both conditions. The background therefore sits *near*
-       zero (measured median on real data: -0.01), which is what makes the scale
-       discriminative.
-
-    Two things this score is not. It is not a Pearson correlation: correlation is
-    the cosine of vectors centred across the dimensions being dotted, whereas the
-    centroid subtracted here is a per-dimension mean over sentences. And zero is
-    an empirical, not an exact, no-correspondence point — the size-weighted mean
-    of the *unnormalised* deviations vanishes, but the mean of their pairwise
-    cosines does not. Nothing downstream assumes it does: `calibrate_match_threshold`
-    estimates the background median from the matrix rather than fixing it at 0.
-
-    Note also that centring per condition removes the between-condition mean
-    difference by construction. That is what makes topics comparable on their
-    within-condition profiles, but it means a *global* content shift between the
-    two conditions is invisible to this score.
-    """
-    names_a = list(topics_a.keys())
-    names_b = list(topics_b.keys())
-
-    # Single encode pass over the union of both conditions' sentences.
-    occ_a = [s for name in names_a for s in topics_a[name]]
-    occ_b = [s for name in names_b for s in topics_b[name]]
-    unique_sents = list(dict.fromkeys(occ_a + occ_b))
-    if not unique_sents:
-        return pd.DataFrame(), pd.DataFrame(), np.empty((0, 0)), np.empty((0, 0))
-
-    embeddings = np.asarray(_embed_sentences(tuple(unique_sents), model_name), dtype=np.float64)
-    pos = {s: i for i, s in enumerate(unique_sents)}
-
-    def _centroid(occurrences):
-        """Centroid over sentence *occurrences* (duplicates counted), so that it
-        matches the weighting used by the topic means below."""
-        idx = [pos[s] for s in occurrences if s in pos]
-        return embeddings[idx].mean(axis=0) if idx else np.zeros(embeddings.shape[1])
-
-    centroid_a = _centroid(occ_a)
-    centroid_b = _centroid(occ_b)
-
-    def _topic_vecs(topics, names, centroid):
-        """Return centered *and* uncentered topic means (same topic order)."""
-        vecs, raw, valid = [], [], []
-        for name in names:
-            idx = [pos[s] for s in topics[name] if s in pos]
-            if not idx:
-                continue
-            mean_vec = embeddings[idx].mean(axis=0)
-            raw.append(mean_vec)
-            vecs.append(mean_vec - centroid)
-            valid.append(name)
-        return np.array(vecs), np.array(raw), valid
-
-    vecs_a, raw_a, valid_a = _topic_vecs(topics_a, names_a, centroid_a)
-    vecs_b, raw_b, valid_b = _topic_vecs(topics_b, names_b, centroid_b)
-    if len(valid_a) == 0 or len(valid_b) == 0:
-        return pd.DataFrame(), pd.DataFrame(), vecs_a, vecs_b
-
-    sim_df = pd.DataFrame(cosine_similarity(vecs_a, vecs_b), index=valid_a, columns=valid_b)
-    # Uncentered cosine, reported alongside for interpretation only. It answers
-    # "how much content do these two topics share in absolute terms", but it is
-    # useless as a matching rule: sentence-transformer embeddings are anisotropic,
-    # so on real data every pair scores ~0.55-0.98 and the ranking is dominated by
-    # how generic a topic is. Matching decisions use the centered score.
-    raw_df = pd.DataFrame(cosine_similarity(raw_a, raw_b), index=valid_a, columns=valid_b)
-    return sim_df, raw_df, vecs_a, vecs_b
-
-
-# ── Threshold calibration ────────────────────────────────────────────────────
-# A fixed cut-off like "0.50" is not portable: its meaning shifts with the
-# embedding model, the corpus and the granularity. Instead, calibrate against the
-# comparison's own background.
-#
-# Rationale for the null: at most min(n_a, n_b) of the n_a x n_b cells can be
-# genuine correspondences, so >=95% of the matrix is by construction
-# non-corresponding pairs. Robust location/scale (median / MAD) of the whole
-# matrix therefore estimate the "no correspondence" distribution almost
-# unaffected by the handful of real matches sitting in the tail.
-#
-# Rejected alternative: a permutation null that reshuffles sentences between
-# topics within each condition. Measured on real data it sits at mean 0.00 with
-# sd 0.12, so it flags ~15% of all pairs at p<0.05 and admits obvious
-# non-matches (e.g. "Sudden perception of deeper reality" vs "Uncontrollable
-# laughter", sim 0.27, p=0.012). It tests "more alike than two random sentence
-# bags", which is far weaker than "about the same theme" — much too lenient.
-
-_MAD_TO_SD = 1.4826
-
-# Stringency presets: k = how many robust SDs above the background median.
-# Validated against hand-labelled matches on a 36x43 real comparison, where the
-# best achievable F1 sat at a cut-off of ~0.62; k=3.5 reproduces that value
-# (0.627) without hard-coding it.
-STRINGENCY_LEVELS = {
-    "Lenient (k = 3.0)": 3.0,
-    "Balanced (k = 3.5) — recommended": 3.5,
-    "Strict (k = 4.0)": 4.0,
-}
-
-
-def _robust_loc_scale(values: np.ndarray) -> tuple[float, float]:
-    """Median and MAD-based SD estimate, with fallbacks for degenerate input."""
-    v = np.asarray(values, dtype=np.float64).ravel()
-    v = v[np.isfinite(v)]
-    if v.size == 0:
-        return 0.0, 1.0
-    med = float(np.median(v))
-    sd = _MAD_TO_SD * float(np.median(np.abs(v - med)))
-    if not np.isfinite(sd) or sd <= 1e-9:          # e.g. a 1xN matrix
-        sd = float(np.std(v))
-    if not np.isfinite(sd) or sd <= 1e-9:
-        sd = 1.0
-    return med, sd
-
-
-def calibrate_match_threshold(sim_df: pd.DataFrame, k: float) -> dict:
-    """Derive a match threshold from the background distribution of `sim_df`.
-
-    Returns the threshold plus the diagnostics needed to judge whether it is too
-    lenient or too strict.
-    """
-    n_a, n_b = (sim_df.shape if sim_df.size else (0, 0))
-    med, sd = _robust_loc_scale(sim_df.values if sim_df.size else np.array([]))
-    threshold = med + k * sd
-    tail = float(norm.sf(k))                       # per-pair false-positive rate
-
-    # Expected chance matches under one-to-one (best-hit) matching: each of the
-    # n_a topics gets one shot at n_b candidates, so P(its best hit clears the
-    # bar by chance) = 1 - (1 - tail)^n_b.
-    expected_chance = (n_a * (1.0 - (1.0 - tail) ** n_b)) if n_a and n_b else 0.0
-    expected_chance = min(expected_chance, float(min(n_a, n_b) if n_a and n_b else 0))
-
-    vals = sim_df.values[np.isfinite(sim_df.values)] if sim_df.size else np.array([])
-    background_pct = float((vals < threshold).mean() * 100) if vals.size else 0.0
-    return {
-        "threshold": float(threshold),
-        "k": float(k),
-        "median": med,
-        "robust_sd": sd,
-        "tail": tail,
-        "expected_chance": float(expected_chance),
-        "background_pct": background_pct,
-        "n_pairs": int(n_a * n_b),
-        "max_possible": int(min(n_a, n_b)) if n_a and n_b else 0,
-    }
-
-
-def pair_zscores(sim_df: pd.DataFrame) -> pd.DataFrame:
-    """Per-pair `z_min`: how far a score stands out within its own row *and* its
-    own column, in robust SDs.
-
-    A global threshold cannot catch a "hub" topic — a broad, generic theme that
-    scores highly against everything in the other condition. Such a topic is not
-    a specific correspondence. Requiring a pair to be an outlier in both its row
-    and its column filters those out.
-    """
-    if sim_df.empty:
-        return pd.DataFrame()
-    S = sim_df.values
-    z_row = np.empty_like(S)
-    z_col = np.empty_like(S)
-    for i in range(S.shape[0]):
-        m, s = _robust_loc_scale(S[i, :])
-        z_row[i, :] = (S[i, :] - m) / s
-    for j in range(S.shape[1]):
-        m, s = _robust_loc_scale(S[:, j])
-        z_col[:, j] = (S[:, j] - m) / s
-    return pd.DataFrame(np.minimum(z_row, z_col), index=sim_df.index, columns=sim_df.columns)
-
-
-# def greedy_match(sim_df: pd.DataFrame, threshold: float,
-#                  z_df: pd.DataFrame | None = None, min_z: float | None = None):
-#     """One-to-one greedy matching: repeatedly take the highest remaining score.
-
-#     Returns (matches, unmatched_a, unmatched_b) where each match is a dict with
-#     the score, `z_min`, and whether the pair is a reciprocal best hit.
-#     """
-#     unmatched_a = list(sim_df.index)
-#     unmatched_b = list(sim_df.columns)
-#     matches: list[dict] = []
-#     if sim_df.empty:
-#         return matches, unmatched_a, unmatched_b
-
-#     S = sim_df.values.astype(np.float64).copy()
-#     S[~np.isfinite(S)] = -np.inf
-#     # Reciprocal best hit is a property of the original matrix, so record it first.
-#     best_for_row = S.argmax(axis=1)
-#     best_for_col = S.argmax(axis=0)
-#     rows, cols = list(sim_df.index), list(sim_df.columns)
-#     work = S.copy()
-
-#     for _ in range(min(S.shape)):
-#         flat = int(np.argmax(work))
-#         i, j = divmod(flat, work.shape[1])
-#         score = float(work[i, j])
-#         if not np.isfinite(score) or score < threshold:
-#             break
-#         z_min = float(z_df.iat[i, j]) if z_df is not None and not z_df.empty else float("nan")
-#         if min_z is None or not np.isfinite(z_min) or z_min >= min_z:
-#             matches.append({
-#                 "a": rows[i], "b": cols[j], "score": score, "z_min": z_min,
-#                 "reciprocal_best": bool(best_for_row[i] == j and best_for_col[j] == i),
-#             })
-#             unmatched_a.remove(rows[i])
-#             unmatched_b.remove(cols[j])
-#             work[i, :] = -np.inf
-#             work[:, j] = -np.inf
-#         else:
-#             # Rejected on z_min only: retire this cell, leave both topics available.
-#             work[i, j] = -np.inf
-#     return matches, unmatched_a, unmatched_b
-
-
-def greedy_match(sim_df: pd.DataFrame, threshold: float,
-                 z_df: pd.DataFrame | None = None, min_z: float | None = None):
-    """One-to-one greedy matching: repeatedly take the highest remaining score.
-
-    Returns (matches, unmatched_a, unmatched_b) where each match is a dict with
-    the score, `z_min`, and whether the pair is a reciprocal best hit.
-    """
-    unmatched_a = list(sim_df.index)
-    unmatched_b = list(sim_df.columns)
-    matches: list[dict] = []
-    if sim_df.empty:
-        return matches, unmatched_a, unmatched_b
-
-    S = sim_df.values.astype(np.float64).copy()
-    S[~np.isfinite(S)] = -np.inf
-    # Reciprocal best hit is a property of the original matrix, so record it first.
-    best_for_row = S.argmax(axis=1)
-    best_for_col = S.argmax(axis=0)
-    rows, cols = list(sim_df.index), list(sim_df.columns)
-    work = S.copy()
-
-    n_max = min(S.shape)
-    while len(matches) < n_max:
-        flat = int(np.argmax(work))
-        i, j = divmod(flat, work.shape[1])
-        score = float(work[i, j])
-        if not np.isfinite(score) or score < threshold:
-            break
-        z_min = float(z_df.iat[i, j]) if z_df is not None and not z_df.empty else float("nan")
-        if min_z is None or not np.isfinite(z_min) or z_min >= min_z:
-            matches.append({
-                "a": rows[i], "b": cols[j], "score": score, "z_min": z_min,
-                "reciprocal_best": bool(best_for_row[i] == j and best_for_col[j] == i),
-            })
-            unmatched_a.remove(rows[i])
-            unmatched_b.remove(cols[j])
-            work[i, :] = -np.inf
-            work[:, j] = -np.inf
-        else:
-            work[i, j] = -np.inf
-    return matches, unmatched_a, unmatched_b
+def compute_condition_similarity(topics_a: dict, topics_b: dict, model_name: str):
+    """Cached wrapper around `mosaic_core.comparison.compute_condition_similarity`
+    (per-condition centred cosine; see that function for the method)."""
+    return _core_condition_similarity(
+        topics_a, topics_b, lambda sents: _embed_sentences(tuple(sents), model_name))
 
 
 
@@ -2320,15 +1921,8 @@ def _cond_threshold_ui(sim_df: pd.DataFrame, key_suffix: str = ""):
                      "The slider starts at the calibrated value; the chart below shows "
                      "where your choice sits relative to the background.",
             )
-        calib = calibrate_match_threshold(sim_df, 3.5)
         # Express the manual choice on the same scale so it stays interpretable.
-        calib["k"] = (threshold - calib["median"]) / calib["robust_sd"]
-        calib["tail"] = float(norm.sf(calib["k"]))
-        n_a, n_b = sim_df.shape
-        calib["expected_chance"] = min(
-            n_a * (1.0 - (1.0 - calib["tail"]) ** n_b), float(min(n_a, n_b)))
-        calib["threshold"] = threshold
-        calib["background_pct"] = float((sim_df.values < threshold).mean() * 100)
+        calib = describe_threshold(sim_df, threshold)
         with tc2:
             st.metric("Equivalent stringency", f"k = {calib['k']:.2f}",
                       help="Robust SDs above the background median. Below ~3.0 is "
@@ -2754,9 +2348,9 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
         st.info("One condition has no sentences in the shared themes — test skipped.")
     else:
         try:
-            chi2_stat, p_val, dof, expected = chi2_contingency(table)
-            n_obs = float(table.sum())
-            cramers_v = float(np.sqrt(chi2_stat / (n_obs * (min(table.shape) - 1))))
+            _chi = shared_theme_chi2(table)
+            chi2_stat, p_val, dof = _chi["chi2"], _chi["p"], _chi["dof"]
+            cramers_v = _chi["cramers_v"]
             # Cramér's V first, deliberately: it is the interpretable quantity here
             # (see the nesting caveat above), and p is reported descriptively.
             c1, c2, c3, c4 = st.columns(4)
@@ -2789,7 +2383,7 @@ def _condition_comparison_ui(embedding_model: str, key_suffix: str = "") -> None
                 "shared themes were selected by the matching step on this same data, "
                 "so the test is conditional on that pairing."
             )
-            small = float((expected < 5).mean())
+            small = _chi["small_expected_frac"]
             if small > 0.2:
                 st.warning(
                     f"{small*100:.0f}% of expected counts are below 5, above the "
@@ -3605,27 +3199,10 @@ else:
             if subsample_perc < 100 and 'idx' in locals():
                 meta_df = meta_df.iloc[idx].reset_index(drop=True)
             
-            # Create a mapping dataframe (whoch topic belongs to which original report)
-            # use 'model.topics_' which aligns 1:1 with 'docs' and 'meta_df'
-            topic_sources = pd.DataFrame({
-                "Topic": model.topics_,
-                "Report_ID": meta_df["_source_row_idx"],
-                "Sentence": docs
-            })
-
-            # Remove outliers (-1) for this specific analysis if desired
-            topic_sources = topic_sources[topic_sources["Topic"] != -1]
-
-            # Calculate Aggregated stats per Topic
-            diversity_stats = topic_sources.groupby("Topic").agg(
-                Total_Sentences=('Sentence', 'count'),
-                Unique_Reports=('Report_ID', 'nunique')
-            ).reset_index()
-
-            # Calculate a "Repetition Score" 
-            # 1.0 = Perfectly diverse (Every sentence comes from a different person)
-            # Low = Repetitive (One person said many sentences in this topic)
-            diversity_stats["Diversity_Ratio"] = diversity_stats["Unique_Reports"] / diversity_stats["Total_Sentences"]
+            # Diversity ratio per topic: distinct source reports / sentences
+            # (1.0 = every sentence from a different person). Outliers excluded.
+            # model.topics_ aligns 1:1 with docs and meta_df.
+            diversity_stats = topic_diversity(model.topics_, meta_df["_source_row_idx"])
             
             # Map Topic Names
             if "llm_names" in st.session_state:
@@ -3741,76 +3318,22 @@ else:
                 
                 if "quality_metrics" not in st.session_state or st.session_state.quality_metrics_hash != get_config_hash(current_config):
                     with st.spinner("Calculating coherence metrics..."):
-                        # prepare Data for Gensim (C_v)
-                        # IMPORTANT: tokenise the docs the same way BERTopic's CountVectorizer
-                        # does (lowercase + the default token pattern: word chars, 2+ length),
-                        # otherwise the gensim dictionary keeps original case/punctuation
-                        # (e.g. "Death,") and never matches the cleaned topic words
-                        # (e.g. "death"), which makes CoherenceModel raise
-                        # "unable to interpret topic as either a list of tokens or a list of ids".
-                        _token_pattern = re.compile(r"(?u)\b\w\w+\b")
-                        tokenized_docs = [_token_pattern.findall(d.lower()) for d in docs]
-                        dictionary = Dictionary(tokenized_docs)
-                        _vocab = dictionary.token2id
-
-                        # Get top 10 words for every active topic (excluding outliers)
+                        # C_v (word co-occurrence) and C_embed (mean pairwise cosine of a
+                        # topic's sentence embeddings, as defined in the MOSAIC paper), both
+                        # from mosaic_core.metrics; outliers excluded. C_embed reuses the
+                        # document embeddings already in memory — nothing is re-encoded.
                         unique_topics = [t for t in set(tm.topics_) if t != -1]
-                        topics_top_words = []
+                        topic_words = []
                         for t in unique_topics:
-                            topic_words = tm.get_topic(t)
+                            words = tm.get_topic(t)
                             # tm.get_topic() can return False or empty for some topics
-                            if topic_words and topic_words is not False:
-                                # split n-grams into their component tokens and keep only
-                                # tokens that are actually present in the dictionary, so a
-                                # single OOV / multi-word phrase can't crash the whole metric
-                                words = []
-                                for word, _ in topic_words[:10]:
-                                    for tok in str(word).lower().split():
-                                        if tok in _vocab and tok not in words:
-                                            words.append(tok)
-                                # C_v needs at least 2 words to compute co-occurrence
-                                if len(words) >= 2:
-                                    topics_top_words.append(words)
+                            if words and words is not False:
+                                topic_words.append([w for w, _ in words])
+                        c_v_score = topic_coherence_cv(docs, topic_words, top_n=10)
 
-                        # calculate C_v
-                        if topics_top_words and len(topics_top_words) > 0:
-                            cm = CoherenceModel(
-                                topics=topics_top_words,
-                                texts=tokenized_docs,
-                                dictionary=dictionary,
-                                coherence='c_v',
-                                processes=1
-                            )
-                            c_v_score = cm.get_coherence()
-                        else:
-                            c_v_score = 0.0
-
-                        # Embedding coherence (C_embed), as defined in the MOSAIC paper:
-                        # each topic's average cosine similarity over all unique pairs of
-                        # its *sentence* embeddings, then averaged across topics
-                        # (outliers excluded). It is computed on the document embeddings
-                        # already in memory — nothing is re-encoded.
-                        #
-                        # Closed form: for unit vectors, sum_{i<j} cos(e_i,e_j) =
-                        # (||sum_i u_i||^2 - N) / 2, so a topic with thousands of
-                        # sentences costs O(N*d) instead of building an N x N matrix.
                         emb_coh_score = 0.0
-                        _emb_arr = np.asarray(embeddings, dtype=np.float64)
-                        _topic_arr = np.asarray(tm.topics_)
-                        if len(_topic_arr) == len(_emb_arr):
-                            _unit = _emb_arr / np.clip(
-                                np.linalg.norm(_emb_arr, axis=1, keepdims=True), 1e-12, None
-                            )
-                            _intra = []
-                            for t in unique_topics:
-                                _u = _unit[_topic_arr == t]
-                                n_k = len(_u)
-                                if n_k < 2:
-                                    continue  # a pairwise average needs at least two sentences
-                                _s = _u.sum(axis=0)
-                                _intra.append((float(_s @ _s) - n_k) / (n_k * (n_k - 1)))
-                            if _intra:
-                                emb_coh_score = float(np.mean(_intra))
+                        if len(tm.topics_) == len(embeddings):
+                            emb_coh_score = embedding_coherence(embeddings, tm.topics_)
 
                         st.session_state.quality_metrics = (c_v_score, emb_coh_score)
                         st.session_state.quality_metrics_hash = get_config_hash(current_config)

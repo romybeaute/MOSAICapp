@@ -324,6 +324,10 @@ class TestSharedThemeChi2:
         assert res["cramers_v"] == pytest.approx(np.sqrt(chi2 / (120 * 1)))
         assert res["n"] == 120 and res["n_themes"] == 3
 
+    def test_small_expected_fraction(self):
+        assert shared_theme_chi2([[30, 10], [10, 30]])["small_expected_frac"] == 0.0
+        assert shared_theme_chi2([[3, 1], [1, 3], [50, 50]])["small_expected_frac"] == pytest.approx(4 / 6)
+
     def test_identical_proportions_give_zero_effect(self):
         res = shared_theme_chi2([[10, 20], [30, 60]])
         assert res["cramers_v"] == pytest.approx(0.0, abs=1e-12)

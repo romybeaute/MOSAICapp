@@ -388,7 +388,9 @@ def shared_theme_chi2(table) -> dict:
     All-zero rows are dropped. Raises ValueError if fewer than 2 themes remain or
     one condition has no sentences in them.
 
-    Returns a dict with ``chi2, p, dof, cramers_v, n, n_themes``.
+    Returns a dict with ``chi2, p, dof, cramers_v, n, n_themes`` and
+    ``small_expected_frac``, the share of expected counts below 5; above 0.2 the
+    χ² approximation is unreliable.
     """
     table = np.asarray(table, dtype=float)
     if table.ndim != 2 or table.shape[1] != 2:
@@ -399,7 +401,7 @@ def shared_theme_chi2(table) -> dict:
                          "proportions differ between conditions.")
     if table.sum(axis=0).min() == 0:
         raise ValueError("One condition has no sentences in the shared themes.")
-    chi2_stat, p_val, dof, _ = chi2_contingency(table)
+    chi2_stat, p_val, dof, expected = chi2_contingency(table)
     n_obs = float(table.sum())
     cramers_v = float(np.sqrt(chi2_stat / (n_obs * (min(table.shape) - 1))))
     return {
@@ -409,4 +411,5 @@ def shared_theme_chi2(table) -> dict:
         "cramers_v": cramers_v,
         "n": int(n_obs),
         "n_themes": int(len(table)),
+        "small_expected_frac": float((expected < 5).mean()),
     }

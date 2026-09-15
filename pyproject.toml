@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "MOSAICapp"
-version = "0.1.0"
+version = "2.0.0"
 description = "MOSAIC: library and Streamlit app for Mapping of Subjective Accounts into Interpreted Clusters"
 readme = "README.md"
 license = {text = "MIT"}

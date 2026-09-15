@@ -2,8 +2,9 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "MOSAIC-app: Interactive Topic Modelling for Phenomenological Reports"
-version: 1.0.0
-date-released: 2026-01-19
+version: 2.0.0
+date-released: 2026-09-15
+doi: 10.5281/zenodo.18394316
 url: "https://github.com/romybeaute/MOSAICapp"
 repository-code: "https://github.com/romybeaute/MOSAICapp"
 license: MIT
@@ -24,6 +25,9 @@ keywords:
   - BERTopic
   - natural language processing
 abstract: >-
-  MOSAIC-app is an interactive web application that enables researchers 
-  to apply transformer-based topic modelling to phenomenological free-text 
-  reports without requiring programming expertise.
+  MOSAIC-app is an interactive web application that enables researchers
+  to apply transformer-based topic modelling to phenomenological free-text
+  reports without requiring programming expertise. Its analysis methods
+  (topic modelling, zero-shot classification, condition comparison and
+  topic metrics) are provided by the mosaic_core Python library, which can
+  be used independently of the interface.

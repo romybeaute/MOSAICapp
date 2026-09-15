@@ -9,7 +9,7 @@ pinned: false
 
 # MOSAICapp
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18394317.svg)](https://doi.org/10.5281/zenodo.18394317)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18394316.svg)](https://doi.org/10.5281/zenodo.18394316)
 
 A web application for topic modelling of phenomenological reports using BERTopic and transformer embeddings.
 
@@ -336,16 +336,27 @@ MOSAICapp has been used to analyse:
 
 ## Citation
 
+If you use MOSAICapp, please cite the method paper:
+
 ```bibtex
-@article{beaute2025mosaic,
-  title={Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC): 
+@article{beaute2026mosaic,
+  title={Mapping of Subjective Accounts into Interpreted Clusters (MOSAIC):
          Topic Modelling and LLM Applied to Stroboscopic Phenomenology},
-  author={Beauté, Romy and Schwartzman, David J and Dumas, Guillaume and 
+  author={Beauté, Romy and Schwartzman, David J and Dumas, Guillaume and
           Crook, Jennifer and Macpherson, Fiona and Barrett, Adam B and Seth, Anil K},
-  journal={arXiv preprint arXiv:2502.18318},
-  year={2025}
+  journal={Neuroscience of Consciousness},
+  volume={2026},
+  number={1},
+  pages={niag008},
+  year={2026},
+  doi={10.1093/nc/niag008},
+  note={Preprint: arXiv:2502.18318}
 }
 ```
+
+To cite the software itself, use the Zenodo DOI
+[10.5281/zenodo.18394316](https://doi.org/10.5281/zenodo.18394316), which always resolves to the
+latest release (GitHub's "Cite this repository" button reads [CITATION.cff](CITATION.cff)).
 
 ## Contributing
 

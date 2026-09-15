@@ -95,7 +95,10 @@ except Exception:
         return _EVAL_ROOT.joinpath(*parts)
 
 
-# MOSAIC analysis library (Streamlit-free; the methods themselves live here)
+# MOSAIC analysis library (Streamlit-free; the methods themselves live here).
+# `streamlit run` already puts this folder on sys.path; this covers other launchers.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mosaic_core.zeroshot import (
     parse_categories as _zs_parse_categories,
     embeddings_fingerprint as _zs_embeddings_fingerprint,
@@ -1262,6 +1265,17 @@ def generate_and_save_embeddings(
 # =====================================================================
 # 7. Sidebar — dataset, upload, parameters
 # =====================================================================
+
+# Advanced analyses are opt-in so the default interface stays the core topic-modelling
+# workflow. `?advanced=1` in the URL turns them on by default (e.g. for workshops).
+ADVANCED_MODE = st.sidebar.toggle(
+    "Advanced analyses",
+    value=st.query_params.get("advanced") == "1",
+    key="advanced_mode",
+    help="Adds the **Zero-Shot Classification** and **Condition Comparison** tabs, "
+         "and lets you use both on files exported from a previous run without "
+         "re-running the pipeline.",
+)
 
 st.sidebar.header("Data Input Method")
 
@@ -2486,19 +2500,26 @@ if not os.path.exists(EMBEDDINGS_FILE):
         )
 
     st.divider()
-    st.markdown("**— or —**")
+    if ADVANCED_MODE:
+        st.markdown("**— or —**")
 
-    _showing_tools = st.session_state.get("show_precomputed_tools", False)
-    _toggle_label = (
-        "Hide analysis tools"
-        if _showing_tools
-        else "Skip pipeline — I'll upload precomputed files from a previous run"
-    )
-    if st.button(_toggle_label, key="skip_to_tools_btn"):
-        st.session_state["show_precomputed_tools"] = not _showing_tools
-        st.rerun()
+        _showing_tools = st.session_state.get("show_precomputed_tools", False)
+        _toggle_label = (
+            "Hide analysis tools"
+            if _showing_tools
+            else "Skip pipeline — I'll upload precomputed files from a previous run"
+        )
+        if st.button(_toggle_label, key="skip_to_tools_btn"):
+            st.session_state["show_precomputed_tools"] = not _showing_tools
+            st.rerun()
+    else:
+        st.caption(
+            "Already have embeddings or topic summaries from a previous run? Turn on "
+            "**Advanced analyses** in the sidebar to use Zero-Shot Classification and "
+            "Condition Comparison on them without running the pipeline."
+        )
 
-    if st.session_state.get("show_precomputed_tools"):
+    if ADVANCED_MODE and st.session_state.get("show_precomputed_tools"):
         st.info(
             "Upload files you exported from a previous pipeline run. "
             "The embedding model selected in the sidebar will be used for any re-embedding steps."
@@ -3121,7 +3142,10 @@ else:
     # =================================================================
     # 9. Visualisation & History Tabs
     # =================================================================
-    main_tab, zeroshot_tab, condition_tab, history_tab, compare_tab = st.tabs(["Main Results", "Zero-Shot Classification", "Condition Comparison", "Run History", "Compare Runs"])
+    if ADVANCED_MODE:
+        main_tab, zeroshot_tab, condition_tab, history_tab, compare_tab = st.tabs(["Main Results", "Zero-Shot Classification", "Condition Comparison", "Run History", "Compare Runs"])
+    else:
+        main_tab, history_tab, compare_tab = st.tabs(["Main Results", "Run History", "Compare Runs"])
 
     st.markdown(
         """
@@ -4002,247 +4026,248 @@ else:
         else:
             st.info("Click 'Run Analysis' (scroll down left corner - after params selection -) to begin.")
 
-    # --- ZERO-SHOT TAB ---
-    with zeroshot_tab:
-        st.subheader("Zero-Shot Topic Classification")
-        st.caption(
-            "Classify your documents into **predefined categories** using semantic similarity. "
-            "Uses the same preprocessed docs and embeddings as the main pipeline — no extra embedding step needed."
-        )
-
-        zs_categories_raw = _zs_categories_input("zs", height=260)
-
-        zs_col1, zs_col2 = st.columns([1, 2])
-        with zs_col1:
-            zs_min_sim = st.slider(
-                "Minimum similarity threshold",
-                min_value=0.0,
-                max_value=0.9,
-                value=0.5,
-                step=0.01,
-                help=(
-                    "Sentences whose best category similarity is below this value are left "
-                    "'Unclassified'.\n\n"
-                    "**Raw cosine values are model- and corpus-dependent** — with some "
-                    "embedding models almost all sentences score 0.40–0.55 against every "
-                    "category, so a fixed 'good' value does not exist. After running, use "
-                    "the similarity histogram shown with the results to place this "
-                    "threshold; moving the slider reclassifies instantly (no re-run)."
-                ),
-            )
-            zs_min_margin = st.slider(
-                "Ambiguity margin (best vs runner-up)",
-                min_value=0.0,
-                max_value=0.2,
-                value=0.0,
-                step=0.005,
-                key="zs_margin",
-                help=(
-                    "Require the best category to beat the runner-up by at least this much. "
-                    "Sentences sitting between two category vectors are near coin-flips — "
-                    "raising this leaves them 'Unclassified' instead of assigning them "
-                    "arbitrarily. 0 disables the filter; 0.02–0.05 is a reasonable range."
-                ),
-            )
-
-        with zs_col2:
-            st.info(
-                f"**{len(docs):,}** documents ready\n\n"
-                f"**Embedding model:** `{selected_embedding_model}` (set in the sidebar)\n\n"
-                "Zero-shot works by embedding both your documents **and** your category labels "
-                "into the same vector space, then assigning each sentence to the nearest category. "
-                f"Your documents are already embedded — only the category labels will be re-encoded "
-                f"using `{selected_embedding_model}` when you click Run.\n\n"
-                "**Tip:** bare labels like 'Anxiety' are weak anchors — add a `|` description "
-                "to each line (see the ? on the categories box) for noticeably better matches."
-            )
-
-        if st.button("Run Zero-Shot Classification", type="primary", key="zs_run_btn"):
-            zs_labels, zs_line_labels, zs_line_texts = _zs_parse_categories(zs_categories_raw)
-            if not zs_labels:
-                st.error("Please enter at least one category.")
-            else:
-                with st.spinner(f"Comparing {len(docs):,} documents to {len(zs_labels)} categories…"):
-                    try:
-                        zs_line_sims = compute_zeroshot_similarities(
-                            embeddings,
-                            _zs_embeddings_fingerprint(embeddings),
-                            tuple(zs_line_texts),
-                            selected_embedding_model,
-                        )
-                        st.session_state["zs_results"] = {
-                            "line_sims": zs_line_sims,
-                            "labels": zs_labels,
-                            "line_labels": zs_line_labels,
-                        }
-                        st.session_state["zs_results_docs_file"] = DOCS_FILE
-                    except Exception as e:
-                        st.error(f"Zero-shot classification failed: {e}")
-
-        if "zs_results" in st.session_state and st.session_state.get("zs_results_docs_file") != DOCS_FILE:
-            st.warning("The dataset has changed. Re-run zero-shot classification for the current dataset.")
-        elif isinstance(st.session_state.get("zs_results"), dict):
-            _zs_state = st.session_state["zs_results"]
-            zs_topics, zs_topic_info, zs_per_doc = apply_zeroshot_threshold(
-                _zs_state["line_sims"], _zs_state["labels"], _zs_state["line_labels"],
-                zs_min_sim, zs_min_margin,
-            )
-            zs_categories = _zs_state["labels"]
-
-            st.pyplot(_zs_similarity_histogram(
-                zs_per_doc["confidence"].to_numpy(), zs_min_sim,
-                zs_min_margin, zs_per_doc["margin"].to_numpy(),
-            ))
-            _zs_conf = zs_per_doc["confidence"]
+    if ADVANCED_MODE:
+        # --- ZERO-SHOT TAB ---
+        with zeroshot_tab:
+            st.subheader("Zero-Shot Topic Classification")
             st.caption(
-                f"Best-similarity percentiles: 25% = {_zs_conf.quantile(0.25):.2f} · "
-                f"median = {_zs_conf.quantile(0.5):.2f} · 75% = {_zs_conf.quantile(0.75):.2f}. "
-                "Move the threshold slider to reclassify instantly — a value below the 25% "
-                "mark classifies almost everything; above the 75% mark keeps only the tail."
+                "Classify your documents into **predefined categories** using semantic similarity. "
+                "Uses the same preprocessed docs and embeddings as the main pipeline — no extra embedding step needed."
             )
 
-            # Summary metrics
-            total_zs = len(zs_topics)
-            classified_zs = sum(1 for t in zs_topics if t != -1)
-            unclassified_zs = total_zs - classified_zs
+            zs_categories_raw = _zs_categories_input("zs", height=260)
 
-            zm1, zm2, zm3 = st.columns(3)
-            zm1.metric("Total documents", f"{total_zs:,}")
-            zm2.metric("Classified", f"{classified_zs:,} ({100*classified_zs/total_zs:.1f}%)")
-            zm3.metric("Unclassified", f"{unclassified_zs:,} ({100*unclassified_zs/total_zs:.1f}%)")
-
-            # Build per-doc DataFrame
-            zs_name_map = zs_topic_info.set_index("Topic")["Name"].to_dict()
-            zs_df = pd.DataFrame({"sentence": docs, "topic_id": zs_topics})
-            zs_df["category"] = zs_df["topic_id"].map(zs_name_map).fillna("Unclassified")
-            zs_df = pd.concat([zs_df, zs_per_doc.reset_index(drop=True)], axis=1)
-
-            # Bar chart (classified topics only, sorted by count)
-            zs_plot_df = (
-                zs_topic_info[zs_topic_info["Topic"] != -1]
-                .sort_values("Count", ascending=True)
-                .reset_index(drop=True)
-            )
-
-            if not zs_plot_df.empty:
-                st.subheader("Distribution across categories")
-                # Colour by rank, not by value — see _zs_rank_ramp.
-                _cmap = plt.get_cmap("viridis")
-                _bar_colors = [_cmap(x) for x in _zs_rank_ramp(len(zs_plot_df))]
-
-                fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.62)))
-                fig_zs.patch.set_facecolor("white")
-                ax_zs.set_facecolor("#f8f9fa")
-
-                bars = ax_zs.barh(
-                    zs_plot_df["Name"], zs_plot_df["Count"],
-                    color=_bar_colors, edgecolor="white", linewidth=0.8, height=0.65,
+            zs_col1, zs_col2 = st.columns([1, 2])
+            with zs_col1:
+                zs_min_sim = st.slider(
+                    "Minimum similarity threshold",
+                    min_value=0.0,
+                    max_value=0.9,
+                    value=0.5,
+                    step=0.01,
+                    help=(
+                        "Sentences whose best category similarity is below this value are left "
+                        "'Unclassified'.\n\n"
+                        "**Raw cosine values are model- and corpus-dependent** — with some "
+                        "embedding models almost all sentences score 0.40–0.55 against every "
+                        "category, so a fixed 'good' value does not exist. After running, use "
+                        "the similarity histogram shown with the results to place this "
+                        "threshold; moving the slider reclassifies instantly (no re-run)."
+                    ),
                 )
-                _max_count = zs_plot_df["Count"].max()
-                for bar in bars:
-                    w = bar.get_width()
-                    ax_zs.text(
-                        w + _max_count * 0.015,
-                        bar.get_y() + bar.get_height() / 2,
-                        str(int(w)),
-                        va="center", ha="left", fontsize=9,
-                        color="#333333", fontweight="bold",
+                zs_min_margin = st.slider(
+                    "Ambiguity margin (best vs runner-up)",
+                    min_value=0.0,
+                    max_value=0.2,
+                    value=0.0,
+                    step=0.005,
+                    key="zs_margin",
+                    help=(
+                        "Require the best category to beat the runner-up by at least this much. "
+                        "Sentences sitting between two category vectors are near coin-flips — "
+                        "raising this leaves them 'Unclassified' instead of assigning them "
+                        "arbitrarily. 0 disables the filter; 0.02–0.05 is a reasonable range."
+                    ),
+                )
+
+            with zs_col2:
+                st.info(
+                    f"**{len(docs):,}** documents ready\n\n"
+                    f"**Embedding model:** `{selected_embedding_model}` (set in the sidebar)\n\n"
+                    "Zero-shot works by embedding both your documents **and** your category labels "
+                    "into the same vector space, then assigning each sentence to the nearest category. "
+                    f"Your documents are already embedded — only the category labels will be re-encoded "
+                    f"using `{selected_embedding_model}` when you click Run.\n\n"
+                    "**Tip:** bare labels like 'Anxiety' are weak anchors — add a `|` description "
+                    "to each line (see the ? on the categories box) for noticeably better matches."
+                )
+
+            if st.button("Run Zero-Shot Classification", type="primary", key="zs_run_btn"):
+                zs_labels, zs_line_labels, zs_line_texts = _zs_parse_categories(zs_categories_raw)
+                if not zs_labels:
+                    st.error("Please enter at least one category.")
+                else:
+                    with st.spinner(f"Comparing {len(docs):,} documents to {len(zs_labels)} categories…"):
+                        try:
+                            zs_line_sims = compute_zeroshot_similarities(
+                                embeddings,
+                                _zs_embeddings_fingerprint(embeddings),
+                                tuple(zs_line_texts),
+                                selected_embedding_model,
+                            )
+                            st.session_state["zs_results"] = {
+                                "line_sims": zs_line_sims,
+                                "labels": zs_labels,
+                                "line_labels": zs_line_labels,
+                            }
+                            st.session_state["zs_results_docs_file"] = DOCS_FILE
+                        except Exception as e:
+                            st.error(f"Zero-shot classification failed: {e}")
+
+            if "zs_results" in st.session_state and st.session_state.get("zs_results_docs_file") != DOCS_FILE:
+                st.warning("The dataset has changed. Re-run zero-shot classification for the current dataset.")
+            elif isinstance(st.session_state.get("zs_results"), dict):
+                _zs_state = st.session_state["zs_results"]
+                zs_topics, zs_topic_info, zs_per_doc = apply_zeroshot_threshold(
+                    _zs_state["line_sims"], _zs_state["labels"], _zs_state["line_labels"],
+                    zs_min_sim, zs_min_margin,
+                )
+                zs_categories = _zs_state["labels"]
+
+                st.pyplot(_zs_similarity_histogram(
+                    zs_per_doc["confidence"].to_numpy(), zs_min_sim,
+                    zs_min_margin, zs_per_doc["margin"].to_numpy(),
+                ))
+                _zs_conf = zs_per_doc["confidence"]
+                st.caption(
+                    f"Best-similarity percentiles: 25% = {_zs_conf.quantile(0.25):.2f} · "
+                    f"median = {_zs_conf.quantile(0.5):.2f} · 75% = {_zs_conf.quantile(0.75):.2f}. "
+                    "Move the threshold slider to reclassify instantly — a value below the 25% "
+                    "mark classifies almost everything; above the 75% mark keeps only the tail."
+                )
+
+                # Summary metrics
+                total_zs = len(zs_topics)
+                classified_zs = sum(1 for t in zs_topics if t != -1)
+                unclassified_zs = total_zs - classified_zs
+
+                zm1, zm2, zm3 = st.columns(3)
+                zm1.metric("Total documents", f"{total_zs:,}")
+                zm2.metric("Classified", f"{classified_zs:,} ({100*classified_zs/total_zs:.1f}%)")
+                zm3.metric("Unclassified", f"{unclassified_zs:,} ({100*unclassified_zs/total_zs:.1f}%)")
+
+                # Build per-doc DataFrame
+                zs_name_map = zs_topic_info.set_index("Topic")["Name"].to_dict()
+                zs_df = pd.DataFrame({"sentence": docs, "topic_id": zs_topics})
+                zs_df["category"] = zs_df["topic_id"].map(zs_name_map).fillna("Unclassified")
+                zs_df = pd.concat([zs_df, zs_per_doc.reset_index(drop=True)], axis=1)
+
+                # Bar chart (classified topics only, sorted by count)
+                zs_plot_df = (
+                    zs_topic_info[zs_topic_info["Topic"] != -1]
+                    .sort_values("Count", ascending=True)
+                    .reset_index(drop=True)
+                )
+
+                if not zs_plot_df.empty:
+                    st.subheader("Distribution across categories")
+                    # Colour by rank, not by value — see _zs_rank_ramp.
+                    _cmap = plt.get_cmap("viridis")
+                    _bar_colors = [_cmap(x) for x in _zs_rank_ramp(len(zs_plot_df))]
+
+                    fig_zs, ax_zs = plt.subplots(figsize=(10, max(4, len(zs_plot_df) * 0.62)))
+                    fig_zs.patch.set_facecolor("white")
+                    ax_zs.set_facecolor("#f8f9fa")
+
+                    bars = ax_zs.barh(
+                        zs_plot_df["Name"], zs_plot_df["Count"],
+                        color=_bar_colors, edgecolor="white", linewidth=0.8, height=0.65,
+                    )
+                    _max_count = zs_plot_df["Count"].max()
+                    for bar in bars:
+                        w = bar.get_width()
+                        ax_zs.text(
+                            w + _max_count * 0.015,
+                            bar.get_y() + bar.get_height() / 2,
+                            str(int(w)),
+                            va="center", ha="left", fontsize=9,
+                            color="#333333", fontweight="bold",
+                        )
+
+                    for spine in ("top", "right"):
+                        ax_zs.spines[spine].set_visible(False)
+                    ax_zs.spines["left"].set_color("#cccccc")
+                    ax_zs.spines["bottom"].set_color("#cccccc")
+                    ax_zs.set_xlabel("Number of sentences", fontsize=10, color="#555555")
+                    ax_zs.tick_params(axis="y", labelsize=9, colors="#333333")
+                    ax_zs.tick_params(axis="x", labelsize=8, colors="#777777")
+                    ax_zs.set_xlim(0, _max_count * 1.15)
+                    ax_zs.invert_yaxis()
+                    ax_zs.grid(axis="x", color="#e0e0e0", linewidth=0.8, zorder=0)
+                    ax_zs.set_axisbelow(True)
+                    ax_zs.set_title(
+                        f"Zero-Shot Classification  ·  {classified_zs:,} / {total_zs:,} sentences classified",
+                        fontsize=11, color="#333333", pad=12,
+                    )
+                    plt.tight_layout(pad=1.5)
+                    st.pyplot(fig_zs)
+
+                    buf_zs = BytesIO()
+                    fig_zs.savefig(buf_zs, format="png", dpi=200, bbox_inches="tight")
+                    st.download_button(
+                        "Download chart as PNG",
+                        data=buf_zs.getvalue(),
+                        file_name=f"zeroshot_chart_{os.path.splitext(os.path.basename(CSV_PATH))[0]}.png",
+                        mime="image/png",
+                    )
+                    plt.close(fig_zs)
+
+                # ── MOSAIC topics the categories fail to capture ──────────────
+                _latest_zs = st.session_state.get("latest_results")
+                if (isinstance(_latest_zs, tuple) and len(_latest_zs) == 3
+                        and len(_latest_zs[2]) == len(zs_df)):
+                    _zs_uncovered_topics_ui(
+                        _latest_zs[2], zs_df["category"], zs_min_sim, key_prefix="zs",
+                    )
+                else:
+                    st.caption(
+                        "Run the pipeline in **Main Results** to also see which MOSAIC "
+                        "topics these categories fail to capture."
                     )
 
-                for spine in ("top", "right"):
-                    ax_zs.spines[spine].set_visible(False)
-                ax_zs.spines["left"].set_color("#cccccc")
-                ax_zs.spines["bottom"].set_color("#cccccc")
-                ax_zs.set_xlabel("Number of sentences", fontsize=10, color="#555555")
-                ax_zs.tick_params(axis="y", labelsize=9, colors="#333333")
-                ax_zs.tick_params(axis="x", labelsize=8, colors="#777777")
-                ax_zs.set_xlim(0, _max_count * 1.15)
-                ax_zs.invert_yaxis()
-                ax_zs.grid(axis="x", color="#e0e0e0", linewidth=0.8, zorder=0)
-                ax_zs.set_axisbelow(True)
-                ax_zs.set_title(
-                    f"Zero-Shot Classification  ·  {classified_zs:,} / {total_zs:,} sentences classified",
-                    fontsize=11, color="#333333", pad=12,
-                )
-                plt.tight_layout(pad=1.5)
-                st.pyplot(fig_zs)
+                # Per-category expandable view
+                st.subheader("Sentences per category")
+                for _, row_zs in zs_plot_df.sort_values("Count", ascending=False).iterrows():
+                    cat_name = row_zs["Name"]
+                    count_zs = row_zs["Count"]
+                    with st.expander(f"{cat_name}  ({count_zs} sentences)"):
+                        cat_sentences = (
+                            zs_df[zs_df["category"] == cat_name]
+                            [["sentence", "confidence", "margin", "runner_up"]]
+                            .sort_values("confidence", ascending=False)
+                            .reset_index(drop=True)
+                        )
+                        if len(cat_sentences) > 5:
+                            n_show = st.slider(
+                                "Sentences to show", 5, min(100, len(cat_sentences)),
+                                min(10, len(cat_sentences)),
+                                key=f"zs_show_{cat_name}"
+                            )
+                        else:
+                            n_show = len(cat_sentences)
+                        st.dataframe(
+                            cat_sentences.head(n_show),
+                            use_container_width=True,
+                        )
 
-                buf_zs = BytesIO()
-                fig_zs.savefig(buf_zs, format="png", dpi=200, bbox_inches="tight")
-                st.download_button(
-                    "Download chart as PNG",
-                    data=buf_zs.getvalue(),
-                    file_name=f"zeroshot_chart_{os.path.splitext(os.path.basename(CSV_PATH))[0]}.png",
-                    mime="image/png",
-                )
-                plt.close(fig_zs)
-
-            # ── MOSAIC topics the categories fail to capture ──────────────
-            _latest_zs = st.session_state.get("latest_results")
-            if (isinstance(_latest_zs, tuple) and len(_latest_zs) == 3
-                    and len(_latest_zs[2]) == len(zs_df)):
-                _zs_uncovered_topics_ui(
-                    _latest_zs[2], zs_df["category"], zs_min_sim, key_prefix="zs",
-                )
-            else:
-                st.caption(
-                    "Run the pipeline in **Main Results** to also see which MOSAIC "
-                    "topics these categories fail to capture."
-                )
-
-            # Per-category expandable view
-            st.subheader("Sentences per category")
-            for _, row_zs in zs_plot_df.sort_values("Count", ascending=False).iterrows():
-                cat_name = row_zs["Name"]
-                count_zs = row_zs["Count"]
-                with st.expander(f"{cat_name}  ({count_zs} sentences)"):
-                    cat_sentences = (
-                        zs_df[zs_df["category"] == cat_name]
-                        [["sentence", "confidence", "margin", "runner_up"]]
+                # Unclassified preview — sorted by confidence so near-misses surface first
+                with st.expander(f"Unclassified  ({unclassified_zs} sentences)"):
+                    unclass_sentences = (
+                        zs_df[zs_df["category"] == "Unclassified"]
+                        [["sentence", "best_category", "confidence", "margin"]]
                         .sort_values("confidence", ascending=False)
                         .reset_index(drop=True)
                     )
-                    if len(cat_sentences) > 5:
-                        n_show = st.slider(
-                            "Sentences to show", 5, min(100, len(cat_sentences)),
-                            min(10, len(cat_sentences)),
-                            key=f"zs_show_{cat_name}"
-                        )
-                    else:
-                        n_show = len(cat_sentences)
-                    st.dataframe(
-                        cat_sentences.head(n_show),
-                        use_container_width=True,
-                    )
+                    st.dataframe(unclass_sentences.head(50), use_container_width=True)
 
-            # Unclassified preview — sorted by confidence so near-misses surface first
-            with st.expander(f"Unclassified  ({unclassified_zs} sentences)"):
-                unclass_sentences = (
-                    zs_df[zs_df["category"] == "Unclassified"]
-                    [["sentence", "best_category", "confidence", "margin"]]
-                    .sort_values("confidence", ascending=False)
-                    .reset_index(drop=True)
+                # Download full results
+                zs_base = (st.session_state.get("export_label_val", "").strip()
+                           or os.path.splitext(os.path.basename(CSV_PATH))[0])
+                st.download_button(
+                    "Download full classification results (CSV)",
+                    data=zs_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"zeroshot_{zs_base}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
                 )
-                st.dataframe(unclass_sentences.head(50), use_container_width=True)
 
-            # Download full results
-            zs_base = (st.session_state.get("export_label_val", "").strip()
-                       or os.path.splitext(os.path.basename(CSV_PATH))[0])
-            st.download_button(
-                "Download full classification results (CSV)",
-                data=zs_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name=f"zeroshot_{zs_base}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+        # --- CONDITION COMPARISON TAB ---
+        with condition_tab:
+            st.subheader("Condition Comparison — Semantic Similarity")
 
-    # --- CONDITION COMPARISON TAB ---
-    with condition_tab:
-        st.subheader("Condition Comparison — Semantic Similarity")
-
-        with st.expander("How to use this tab — read first", expanded=True):
-            st.markdown(
-                f"""
+            with st.expander("How to use this tab — read first", expanded=True):
+                st.markdown(
+                    f"""
 **This tab compares the topics found in two different conditions** by measuring the semantic
 similarity between their topic vectors.
 
@@ -4261,10 +4286,10 @@ similarity between their topic vectors.
 - The **match threshold is calibrated from your own data** (see the *Match threshold* section) rather than fixed, because a raw number like 0.50 does not transfer between embedding models or corpora
 - A greedy algorithm finds the best one-to-one pairs above the threshold, and reports roughly how many would be expected by chance — an order-of-magnitude guide, not a false-discovery rate
 - Results include a heatmap, matched/unmatched topic lists, a contingency table, a chi-squared test (report **Cramér's V**, not p — see that section), and a frequency bar chart
-                """
-            )
+                    """
+                )
 
-        _condition_comparison_ui(selected_embedding_model)
+            _condition_comparison_ui(selected_embedding_model)
 
     # --- HISTORY TAB ---
     with history_tab:

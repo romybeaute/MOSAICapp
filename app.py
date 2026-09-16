@@ -1804,8 +1804,15 @@ def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
             return saved.get(label[: -len(_SAVED_SUFFIX)], "")
         return ""
 
+    touched_key = f"{ta_key}_touched"
+
     def _on_preset_change():
         st.session_state[ta_key] = _preset_text(st.session_state[preset_key])
+
+    def _on_categories_edit():
+        # Remember that the list is the user's own, so the reseeding below never
+        # overwrites a deliberate edit (including deliberately emptying the box).
+        st.session_state[touched_key] = True
 
     st.selectbox(
         "Questionnaire / category set",
@@ -1816,14 +1823,24 @@ def _zs_categories_input(key_prefix: str, height: int = 260) -> str:
              "list below and save it under a new name for future use.",
     )
 
-    # Initialise the text area once from the currently selected preset.
+    # Seed the text area from the selected preset. This runs not only on the
+    # first render but whenever the box is empty and the user has not edited it
+    # themselves: Streamlit drops a widget's state when the widget is not
+    # rendered on a run, and several paths skip this tab for a run or two (the
+    # `st.stop()` while precomputed files are still being uploaded, for
+    # instance), which otherwise leaves the box blank with no way back to the
+    # preset short of re-picking it.
     if ta_key not in st.session_state:
         st.session_state[ta_key] = _preset_text(options[0]) if options else ""
+    elif not (st.session_state[ta_key] or "").strip() and not st.session_state.get(touched_key):
+        selected = st.session_state.get(preset_key) or (options[0] if options else "")
+        st.session_state[ta_key] = _preset_text(selected)
 
     raw = st.text_area(
         "Categories — one per line (edit freely)",
         height=height,
         key=ta_key,
+        on_change=_on_categories_edit,
         help="These are the predefined topics you want to classify documents into.\n\n"
              "Each line is one category. **Accuracy improves a lot if you add a short "
              "description after a `|`**, e.g.:\n\n"

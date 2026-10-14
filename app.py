@@ -446,6 +446,23 @@ def load_precomputed_data(docs_file, embeddings_file):
 # Novita Llama 3 8B is around $0.04 per 1M input tokens
 HF_APPROX_PRICE_PER_MTOKENS_USD = 0.04
 
+# Optional local LLM server (Ollama). Labelling runs on this machine, free and
+# without sending reports to a third party. Only offered when it is reachable,
+# so on a hosted Space (no Ollama) nothing changes.
+OLLAMA_URL = os.environ.get("MOSAIC_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _list_ollama_models() -> list[str]:
+    """Names of models pulled into a running Ollama server; [] if none or unreachable."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=0.5) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return sorted(m["name"] for m in data.get("models", []) if m.get("name"))
+    except Exception:
+        return []
+
 
 @st.cache_resource
 def get_hf_client(model_id: str):
@@ -565,10 +582,14 @@ def generate_labels_via_chat_completion(
     temperature: float = 0.2, #deterministic, stable outputs.
     force: bool = False,
     system_prompt: str | None = None,
-    user_template: str | None = None) -> dict[int, str]:
+    user_template: str | None = None,
+    base_url: str | None = None) -> dict[int, str]:
     """
     Label topics after fitting (fast + stable on Spaces).
     Returns {topic_id: label}.
+
+    base_url: an OpenAI-compatible server (e.g. Ollama at OLLAMA_URL + "/v1") to
+    use instead of the Hugging Face Inference API; model_id is then its local name.
     """
 
     # Fall back to the built-in prompts when the UI doesn't override them.
@@ -579,7 +600,9 @@ def generate_labels_via_chat_completion(
 
     # Fold the prompts into the cache key so editing a prompt regenerates labels.
     _prompt_sig = hashlib.md5((system_prompt + "||" + user_template).encode("utf-8")).hexdigest()[:8]
-    cache_path = _labels_cache_path(config_hash + "|" + _prompt_sig, model_id)
+    # Local models get their own cache files, never mixed with API labels.
+    cache_model = f"ollama-{model_id}" if base_url else model_id
+    cache_path = _labels_cache_path(config_hash + "|" + _prompt_sig, cache_model)
 
     if (not force) and cache_path.exists():
         try:
@@ -588,9 +611,14 @@ def generate_labels_via_chat_completion(
         except Exception:
             pass
 
-    client, token = get_hf_client(model_id)
-    if not token:
-        raise RuntimeError("No HF_TOKEN found in env/secrets.")
+    if base_url:
+        # Placeholder token: Ollama ignores it, and it keeps huggingface_hub from
+        # sending the user's saved HF token to the local server.
+        client = InferenceClient(base_url=base_url, token="local")
+    else:
+        client, token = get_hf_client(model_id)
+        if not token:
+            raise RuntimeError("No HF_TOKEN found in env/secrets.")
 
     topic_info = topic_model.get_topic_info()
     topic_info = topic_info[topic_info.Topic != -1].head(max_topics)
@@ -635,6 +663,19 @@ def generate_labels_via_chat_completion(
             if provider_model:
                 st.session_state["hf_last_provider_model"] = provider_model
         except Exception as e:
+            if base_url:
+                if _hf_status_code(e) == 404:
+                    raise RuntimeError(
+                        f"The local model '{model_id}' was not found. "
+                        f"Download it first with: ollama pull {model_id}"
+                    ) from e
+                if _hf_status_code(e) is None:
+                    raise RuntimeError(
+                        f"Could not reach the local LLM server at {base_url}. "
+                        "Start Ollama (`brew services start ollama` or `ollama serve`) "
+                        "and try again."
+                    ) from e
+                raise
             if _hf_status_code(e) == 402:
                 raise RuntimeError(
                     "Hugging Face returned 402 Payment Required for this LLM call. "
@@ -656,7 +697,8 @@ def generate_labels_via_chat_completion(
         else:
             total_tokens = getattr(usage, "total_tokens", None)
 
-        if total_tokens is not None:
+        # Local runs are free, so keep them out of the HF cost estimate.
+        if total_tokens is not None and not base_url:
             st.session_state.setdefault("hf_tokens_total", 0)
             st.session_state["hf_tokens_total"] += int(total_tokens)
 
@@ -3412,39 +3454,71 @@ else:
 
 
 
-            _LLM_PRESETS = (
-                "meta-llama/Llama-3.1-8B-Instruct",
-                "meta-llama/Meta-Llama-3-8B-Instruct",
-                "mistralai/Mistral-7B-Instruct-v0.3",
-                "Custom (type your own)…",
-            )
-            _llm_choice = st.selectbox(
-                "LLM for labelling",
-                _LLM_PRESETS,
-                index=0,
-                key="llm_model_choice",
-                help="""
-                **Must be a model supported by the Hugging Face Serverless Inference API.**
+            # A local Ollama server is only offered when one is running with at
+            # least one model pulled (never the case on the hosted Space).
+            _local_models = _list_ollama_models()
+            _use_local = False
+            if _local_models:
+                _backend = st.radio(
+                    "Labelling backend",
+                    ("Hugging Face API", "Local (Ollama)"),
+                    horizontal=True,
+                    key="llm_backend",
+                    help="**Local (Ollama)** runs the LLM on this computer: free, and the "
+                         "reports never leave it. Local models are quantised, so labels can "
+                         "differ slightly from the same model via the API.",
+                )
+                _use_local = _backend.startswith("Local")
 
-                * `meta-llama/Llama-3.1-8B-Instruct` (Newer, smarter; may require HF PRO)
-                * `meta-llama/Meta-Llama-3-8B-Instruct` (Free-tier friendly, fast)
-                * `mistralai/Mistral-7B-Instruct-v0.3` (Strict instruction following)
-
-                Pick *Custom* to enter any other supported model id.
-                [Browse supported models](https://huggingface.co/models?pipeline_tag=text-generation&inference=warm&sort=trending)
-                """,
-            )
-            if _llm_choice.startswith("Custom"):
-                model_id = st.text_input(
-                    "HF model id for labelling",
-                    value=st.session_state.get("llm_custom_model", "meta-llama/Llama-3.1-8B-Instruct"),
-                    key="llm_custom_model",
+            if _use_local:
+                _default_local = next(
+                    (m for m in _local_models if m.startswith("llama3:8b")), _local_models[0]
+                )
+                model_id = st.selectbox(
+                    "Local model (Ollama)",
+                    _local_models,
+                    index=_local_models.index(_default_local),
+                    key="llm_local_model",
+                    help="Models pulled with `ollama pull <name>`. "
+                         "`llama3:8b` is Meta-Llama-3-8B-Instruct.",
                 )
             else:
-                model_id = _llm_choice
+                _LLM_PRESETS = (
+                    "meta-llama/Llama-3.1-8B-Instruct",
+                    "meta-llama/Meta-Llama-3-8B-Instruct",
+                    "mistralai/Mistral-7B-Instruct-v0.3",
+                    "Custom (type your own)…",
+                )
+                _llm_choice = st.selectbox(
+                    "LLM for labelling",
+                    _LLM_PRESETS,
+                    index=0,
+                    key="llm_model_choice",
+                    help="""
+                    **Must be a model supported by the Hugging Face Serverless Inference API.**
+
+                    * `meta-llama/Llama-3.1-8B-Instruct` (Newer, smarter; may require HF PRO)
+                    * `meta-llama/Meta-Llama-3-8B-Instruct` (Free-tier friendly, fast)
+                    * `mistralai/Mistral-7B-Instruct-v0.3` (Strict instruction following)
+
+                    Pick *Custom* to enter any other supported model id.
+                    [Browse supported models](https://huggingface.co/models?pipeline_tag=text-generation&inference=warm&sort=trending)
+                    """,
+                )
+                if _llm_choice.startswith("Custom"):
+                    model_id = st.text_input(
+                        "HF model id for labelling",
+                        value=st.session_state.get("llm_custom_model", "meta-llama/Llama-3.1-8B-Instruct"),
+                        key="llm_custom_model",
+                    )
+                else:
+                    model_id = _llm_choice
 
             with st.expander("Show LLM configuration and prompts"):
-                st.markdown(f"**HF model id (requested):** `{model_id}`")
+                if _use_local:
+                    st.markdown(f"**Local model (Ollama, {OLLAMA_URL}):** `{model_id}`")
+                else:
+                    st.markdown(f"**HF model id (requested):** `{model_id}`")
             
                 requested_last = st.session_state.get("hf_last_model_param")
                 provider_model = st.session_state.get("hf_last_provider_model")
@@ -3528,7 +3602,8 @@ else:
                 )
             
             
-            if cC.button("Generate LLM labels (API)", use_container_width=True):
+            _gen_label = "Generate LLM labels (local)" if _use_local else "Generate LLM labels (API)"
+            if cC.button(_gen_label, use_container_width=True):
                 try:
                     cfg_hash = st.session_state.get("latest_config_hash", "nohash")
                     llm_names = generate_labels_via_chat_completion(
@@ -3541,6 +3616,7 @@ else:
                         force=force,
                         system_prompt=st.session_state.get("llm_system_prompt", SYSTEM_PROMPT),
                         user_template=st.session_state.get("llm_user_template", USER_TEMPLATE),
+                        base_url=f"{OLLAMA_URL}/v1" if _use_local else None,
                     )
                     st.session_state.llm_names = llm_names
                     st.success(f"Generated {len(llm_names)} labels.")

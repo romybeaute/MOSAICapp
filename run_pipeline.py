@@ -56,7 +56,10 @@ EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 DEVICE         = "cuda"
 SPLIT_SENTENCES = True
 MIN_WORDS      = 3
-HF_TOKEN       = _load_secret("HF_TOKEN")
+# LLM labelling: None = Hugging Face Inference API (needs HF_TOKEN, uses credits);
+# "http://localhost:11434/v1" = a local Ollama server (free; set LLM_MODEL below to e.g. "llama3:8b")
+LLM_BASE_URL   = None
+HF_TOKEN       = None if LLM_BASE_URL else _load_secret("HF_TOKEN")
 
 CONFIG = {
     "umap_params": {
@@ -124,9 +127,8 @@ n_outliers = sum(1 for t in topics if t == -1)
 log.info(f"Topics: {n_topics}  |  Outliers: {n_outliers} ({100*n_outliers/len(topics):.1f}%)")
 
 # ── Step 3: LLM labelling ─────────────────────────────────────────────────────
-log.info("Step 3 — LLM labelling with Qwen3")
-
 LLM_MODEL = "Qwen/Qwen3-8B-Instruct"
+log.info(f"Step 3 — LLM labelling with {LLM_MODEL}" + (f" via {LLM_BASE_URL}" if LLM_BASE_URL else ""))
 
 labels = generate_llm_labels(
     topic_model,
@@ -136,6 +138,7 @@ labels = generate_llm_labels(
     max_docs_per_topic=10,
     doc_char_limit=600,
     temperature=0.2,
+    base_url=LLM_BASE_URL,
 )
 
 # Save to the exact path the app's cache lookup expects

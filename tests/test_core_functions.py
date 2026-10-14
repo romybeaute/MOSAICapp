@@ -496,3 +496,28 @@ class TestGenerateLlmLabels:
         labels = generate_llm_labels(model, hf_token="fake-token")
 
         assert labels[0] == "Light"
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_local_server_does_not_get_hf_token(self, MockClient):
+        mock_client = MockClient.return_value
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content="Light"))]
+        mock_client.chat_completion.return_value = completion
+
+        model = self._make_mock_topic_model([0])
+        labels = generate_llm_labels(
+            model, hf_token="secret-hf-token", model_id="llama3:8b",
+            base_url="http://localhost:11434/v1",
+        )
+
+        assert labels[0] == "Light"
+        MockClient.assert_called_once_with(base_url="http://localhost:11434/v1", token="local")
+        assert mock_client.chat_completion.call_args.kwargs["model"] == "llama3:8b"
+
+    @patch("mosaic_core.core_functions.InferenceClient")
+    def test_unreachable_local_server_raises(self, MockClient):
+        MockClient.return_value.chat_completion.side_effect = ConnectionError("refused")
+
+        model = self._make_mock_topic_model([0])
+        with pytest.raises(RuntimeError, match="Could not reach the local LLM server"):
+            generate_llm_labels(model, hf_token=None, base_url="http://localhost:11434/v1")

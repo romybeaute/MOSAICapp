@@ -425,14 +425,21 @@ def get_hf_status_code(exc):
 
 def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3-8B-Instruct",
                         max_topics=50, max_docs_per_topic=10, doc_char_limit=400,
-                        temperature=0.2):
+                        temperature=0.2, base_url=None):
     """
     Generate topic labels via HuggingFace Inference API.
     
     Returns dict mapping topic_id to label string.
     Raises RuntimeError on 402 (payment required).
+
+    base_url: an OpenAI-compatible server to use instead, e.g. a local Ollama at
+    "http://localhost:11434/v1" (model_id is then the local name, e.g. "llama3:8b").
+    hf_token is not needed and never sent to it.
     """
-    client = InferenceClient(model=model_id, token=hf_token)
+    if base_url:
+        client = InferenceClient(base_url=base_url, token="local")
+    else:
+        client = InferenceClient(model=model_id, token=hf_token)
     
     info = topic_model.get_topic_info()
     info = info[info["Topic"] != -1].head(max_topics)
@@ -470,6 +477,11 @@ def generate_llm_labels(topic_model, hf_token, model_id="meta-llama/Meta-Llama-3
             
         except Exception as e:
             code = get_hf_status_code(e)
+            if base_url and code is None:
+                raise RuntimeError(
+                    f"Could not reach the local LLM server at {base_url}. "
+                    "Start Ollama (`ollama serve`) and try again."
+                ) from e
             if code == 402:
                 raise RuntimeError(
                     "HuggingFace returned 402 Payment Required. "

@@ -5,6 +5,15 @@ archived on Zenodo; the concept DOI
 [10.5281/zenodo.18394316](https://doi.org/10.5281/zenodo.18394316) always resolves to
 the latest version.
 
+## [Unreleased]
+
+### Added
+- Local LLM labelling with [Ollama](https://ollama.com): free, and reports never leave
+  the machine. The app offers a **Local (Ollama)** backend when a running Ollama server
+  has a model pulled (e.g. `ollama pull llama3:8b`); hosted deployments are unchanged.
+  `generate_llm_labels(..., base_url=...)` and `LLM_BASE_URL` in `run_pipeline.py` do
+  the same for scripts.
+
 ## [2.0.0] — 2026-09-15
 
 ### Changed (breaking)
